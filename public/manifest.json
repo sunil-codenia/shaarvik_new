@@ -1,0 +1,31 @@
+{
+    "name": "Shaarvik Control Panel",
+    "short_name": "Shaarvik CP",
+    "description": "Shaarvik Technologies LLP \u2014 Control Panel for CRM, Billing, Support & Operations",
+    "start_url": "/dashboard",
+    "display": "standalone",
+    "background_color": "#0f172a",
+    "theme_color": "#2563eb",
+    "orientation": "portrait-primary",
+    "scope": "/",
+    "icons": [
+        {
+            "src": "/assets/images/app_logo.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any maskable"
+        },
+        {
+            "src": "/assets/images/app_logo.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any maskable"
+        }
+    ],
+    "categories": [
+        "business",
+        "productivity"
+    ],
+    "lang": "en",
+    "dir": "ltr"
+}
