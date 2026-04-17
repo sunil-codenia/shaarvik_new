@@ -301,6 +301,8 @@ export async function getLeadById(id: string) {
       row.converted_to_client_id == null
         ? null
         : String(row.converted_to_client_id),
+    username: row.username || null,
+    password: row.password || null,
   };
 }
 
