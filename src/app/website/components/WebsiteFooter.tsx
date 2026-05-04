@@ -46,7 +46,7 @@ export default function WebsiteFooter() {
             <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider mb-4">Products</h4>
             <ul className="space-y-2.5 mb-6">
               <li>
-                <Link href="/website/buildarya" className="text-sm text-gray-500 hover:text-gray-300 transition-colors">
+                <Link href="https://buildarya.com/" className="text-sm text-gray-500 hover:text-gray-300 transition-colors">
                   Buildarya
                 </Link>
               </li>

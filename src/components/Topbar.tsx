@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Bell, Menu, X, LayoutDashboard, Users, TrendingUp, Settings, LogOut, Package, CreditCard, FileText, Megaphone, LifeBuoy, UserCog, ChevronDown, Globe, Sun, Moon } from 'lucide-react';
+import { Bell, Menu, X, LayoutDashboard, Users, User, TrendingUp, Settings, LogOut, Package, CreditCard, FileText, Megaphone, LifeBuoy, UserCog, ChevronDown, Globe, Sun, Moon } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRBAC } from '@/contexts/RBACContext';
 import Icon from '@/components/ui/AppIcon';
@@ -29,6 +29,7 @@ const mobileNavItems: MobileNavItem[] = [
   { id: 'mob-tickets', label: 'Support', href: '/tickets', icon: LifeBuoy, module: 'Support' },
   { id: 'mob-products', label: 'Products', href: '/products', icon: Package, module: 'Products' },
   { id: 'mob-staff', label: 'Staff', href: '/staff', icon: UserCog, module: 'Staff' },
+  { id: 'mob-profile', label: 'My Profile', href: '/profile', icon: User },
   { id: 'mob-settings', label: 'Settings', href: '/settings', icon: Settings },
 ];
 
@@ -187,6 +188,17 @@ export default function Topbar() {
 
                   {/* Menu Items */}
                   <div className="py-1">
+                    <Link
+                      href="/profile"
+                      onClick={() => setDropdownOpen(false)}
+                      className="flex items-center gap-2.5 px-4 py-2 text-[13px] text-slate-700 transition-colors"
+                      style={{ cursor: 'pointer' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'hsl(var(--muted))'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = ''; }}
+                    >
+                      <User size={14} className="text-slate-400" />
+                      My Profile
+                    </Link>
                     <Link
                       href="/settings"
                       onClick={() => setDropdownOpen(false)}

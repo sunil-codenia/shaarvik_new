@@ -1,8 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { FileText, AlertTriangle, Clock, X, ChevronDown, Search, DollarSign, CheckCircle, RefreshCw } from 'lucide-react';
-import { createClient } from '@/lib/supabase/client';
+import { FileText, AlertTriangle, Clock, X, ChevronDown, Search, DollarSign, CheckCircle, RefreshCw, Download } from 'lucide-react';
 import { logAction } from '@/lib/logger';
 import { usePagination, PaginationBar } from '@/components/ui/Pagination';
 import { useToast } from '@/components/ui/Toast';
@@ -23,6 +22,13 @@ interface Invoice {
   balanceAmount: number;
   status: 'pending' | 'paid' | 'overdue' | 'cancelled';
   createdAt: string;
+  gateway?: string;
+  // Enhanced fields for PDF
+  clientAddress?: string;
+  clientPhone?: string;
+  clientGst?: string;
+  subscriptionPlan?: string;
+  providerName?: string;
 }
 
 const statusConfig: Record<string, { label: string; color: string }> = {
@@ -44,7 +50,7 @@ function getDaysUntilDue(dueDate: string): number {
 
 export default function InvoicesPage() {
   const { success, error: toastError } = useToast();
-  const { loading: profileLoading, userId } = useCompanyId();
+  const { loading: profileLoading, companyId, userId } = useCompanyId();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -61,48 +67,25 @@ export default function InvoicesPage() {
   const [paying, setPaying] = useState(false);
 
   const fetchInvoices = useCallback(async () => {
+    if (!companyId) return;
     setLoading(true);
     try {
-      const supabase = createClient();
       debug.authCheck('invoices', userId);
-
-      debug.dbRequest('invoices', 'SELECT', 'invoices', {});
-      const { data, error } = await supabase
-        .from('invoices')
-        .select(`
-          id,
-          invoice_number,
-          invoice_date,
-          due_date,
-          amount,
-          discount,
-          final_amount,
-          paid_amount,
-          balance_amount,
-          status,
-          created_at,
-          company_subscriptions (
-            id,
-            companies!company_subscriptions_company_id_fkey (
-              name,
-              email
-            )
-          )
-        `)
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        debug.dbError('invoices', 'SELECT', 'invoices', error);
-        toastError(`Failed to load invoices: ${error.message}`);
-        setLoading(false);
-        return;
+      debug.dbRequest('invoices', 'SELECT', 'invoices', { companyId });
+      
+      const res = await fetch(`/api/mysql/invoices?companyId=${companyId}`);
+      if (!res.ok) {
+        throw new Error(`Failed to fetch invoices: ${res.statusText}`);
       }
+      
+      const data = await res.json();
       debug.dbSuccess('invoices', 'SELECT', 'invoices', { count: data?.length });
+
       setInvoices((data || []).map((r: any) => ({
-        id: r.id,
+        id: String(r.id),
         invoiceNumber: r.invoice_number || '',
-        companyName: r.company_subscriptions?.companies?.name || '',
-        companyEmail: r.company_subscriptions?.companies?.email || '',
+        companyName: r.client?.name || r.client_name || 'Individual Client',
+        companyEmail: r.client?.email || r.client_email || '',
         invoiceDate: r.invoice_date,
         dueDate: r.due_date,
         amount: Number(r.amount || 0),
@@ -111,11 +94,21 @@ export default function InvoicesPage() {
         paidAmount: Number(r.paid_amount || 0),
         balanceAmount: Number(r.balance_amount || 0),
         status: r.status,
-        createdAt: r.created_at,
+        createdAt: r.createdAt || r.created_at,
+        clientAddress: r.client?.address || '',
+        clientPhone: r.client?.phone || '',
+        clientGst: r.client?.gst || '',
+        subscriptionPlan: r.subscription_plan || 'SaaS Subscription',
+        providerName: r.provider?.name || 'Shaarvik Technologies LLP',
+        gateway: r.gateway || '',
       })));
-    } catch {}
-    setLoading(false);
-  }, [userId, toastError]);
+    } catch (err: any) {
+      debug.dbError('invoices', 'SELECT', 'invoices', err);
+      toastError(err.message || 'Failed to load invoices.');
+    } finally {
+      setLoading(false);
+    }
+  }, [companyId, userId, toastError]);
 
   useEffect(() => {
     if (profileLoading) return;
@@ -150,6 +143,188 @@ export default function InvoicesPage() {
     setPayError(null);
   };
 
+  const handleDownloadPDF = async (inv: Invoice) => {
+    try {
+      const { default: jsPDF } = await import('jspdf');
+      const { default: autoTable } = await import('jspdf-autotable');
+
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const pageWidth = doc.internal.pageSize.getWidth();
+      
+      // Branding Colors
+      const primaryColor = [15, 23, 42]; // Slate 900
+      const accentColor = [59, 130, 246]; // Blue 500
+      
+      // Local currency formatter for PDF
+      const pdfFmt = (n: number) => 'Rs. ' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+      // Payment Mode Mapper
+      const getPaymentModeLabel = (mode: string) => {
+        const m = mode?.toLowerCase();
+        if (m === 'manual' || m === 'cash') return 'CASH';
+        if (m === 'razorpay') return 'ONLINE / CARD';
+        if (m === 'upi') return 'UPI';
+        return m ? m.toUpperCase() : 'MANUAL';
+      };
+
+      // Header Banner
+      doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.rect(0, 0, pageWidth, 50, 'F');
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(28);
+      doc.setFont('helvetica', 'bold');
+      doc.text('INVOICE', 15, 25);
+      
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(180, 180, 180);
+      doc.text(`#${inv.invoiceNumber}`, 15, 34);
+      
+      // Provider Details (Top Right)
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.text(inv.providerName || 'Shaarvik Technologies LLP', pageWidth - 15, 20, { align: 'right' });
+      
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(180, 180, 180);
+      doc.text('Shaarvik Technologies CP', pageWidth - 15, 27, { align: 'right' });
+      doc.text('support@shaarvik.com', pageWidth - 15, 33, { align: 'right' });
+
+      // Information Bar
+      const barY = 58;
+      const barHeight = 24;
+      doc.setFillColor(250, 250, 250);
+      doc.rect(15, barY, pageWidth - 30, barHeight, 'F');
+      doc.setDrawColor(230, 230, 230);
+      doc.rect(15, barY, pageWidth - 30, barHeight, 'S');
+
+      const col1 = 22;
+      const col2 = 65;
+      const col3 = 108;
+
+      doc.setTextColor(120, 120, 120);
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.text('INVOICE DATE', col1, barY + 8);
+      doc.text('DUE DATE', col2, barY + 8);
+      doc.text('PAYMENT MODE', col3, barY + 8);
+      doc.text('STATUS', pageWidth - 22, barY + 8, { align: 'right' });
+
+      doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.text(new Date(inv.invoiceDate).toLocaleDateString('en-IN'), col1, barY + 16);
+      doc.text(new Date(inv.dueDate).toLocaleDateString('en-IN'), col2, barY + 16);
+      doc.text(getPaymentModeLabel(inv.gateway || 'MANUAL'), col3, barY + 16);
+      
+      // Status Badge Styling
+      const status = (inv.status || 'pending').toUpperCase();
+      let badgeColor = [200, 200, 200];
+      let textColor = [80, 80, 80];
+      if (status === 'PAID') { badgeColor = [34, 197, 94]; textColor = [255, 255, 255]; }
+      else if (status === 'PENDING') { badgeColor = [245, 158, 11]; textColor = [255, 255, 255]; }
+      else if (status === 'OVERDUE') { badgeColor = [239, 68, 68]; textColor = [255, 255, 255]; }
+      
+      const badgeW = 20;
+      doc.setFillColor(badgeColor[0], badgeColor[1], badgeColor[2]);
+      doc.roundedRect(pageWidth - 15 - badgeW - 5, barY + 11.5, badgeW, 7, 1, 1, 'F');
+      doc.setTextColor(textColor[0], textColor[1], textColor[2]);
+      doc.setFontSize(8);
+      doc.text(status, pageWidth - 15 - (badgeW/2) - 5, barY + 16.3, { align: 'center' });
+
+      // Client Section
+      let y = 98;
+      doc.setTextColor(accentColor[0], accentColor[1], accentColor[2]);
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'bold');
+      doc.text('BILL TO', 15, y);
+      
+      y += 8;
+      doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.setFontSize(12);
+      doc.text(inv.companyName, 15, y);
+      
+      y += 6;
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(100, 116, 139);
+      if (inv.companyEmail) { doc.text(inv.companyEmail, 15, y); y += 5; }
+      if (inv.clientPhone) { doc.text(`+91 ${inv.clientPhone}`, 15, y); y += 5; }
+      if (inv.clientAddress) { 
+        const addrText = doc.splitTextToSize(inv.clientAddress, 100);
+        doc.text(addrText, 15, y);
+        y += (addrText.length * 5);
+      }
+      if (inv.clientGst) { 
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+        doc.text(`GST NO: ${inv.clientGst}`, 15, y); 
+      }
+
+      // Line Items Table
+      autoTable(doc, {
+        startY: 140,
+        head: [['#', 'Description', 'Qty', 'Rate', 'Total']],
+        body: [['1', inv.subscriptionPlan || 'Saas Subscription Plan', '1', pdfFmt(inv.amount), pdfFmt(inv.amount)]],
+        styles: { fontSize: 10, cellPadding: 6, valign: 'middle' },
+        headStyles: { fillColor: primaryColor, textColor: 255, fontStyle: 'bold', halign: 'center' },
+        alternateRowStyles: { fillColor: [252, 252, 252] },
+        columnStyles: {
+          0: { cellWidth: 10, halign: 'center' },
+          1: { cellWidth: 'auto', halign: 'left' },
+          2: { cellWidth: 20, halign: 'center' },
+          3: { cellWidth: 35, halign: 'right' },
+          4: { cellWidth: 35, halign: 'right' }
+        },
+        margin: { left: 15, right: 15 }
+      });
+
+      // Totals Block
+      let totalY = (doc as any).lastAutoTable.finalY + 12;
+      doc.setFontSize(10);
+      doc.setTextColor(120, 120, 120);
+      doc.text('Subtotal:', pageWidth - 80, totalY);
+      doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.text(pdfFmt(inv.amount), pageWidth - 15, totalY, { align: 'right' });
+
+      totalY += 10;
+      doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.rect(pageWidth - 90, totalY - 7, 75, 12, 'F');
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      doc.text('TOTAL AMOUNT', pageWidth - 85, totalY + 1);
+      doc.text(pdfFmt(inv.finalAmount), pageWidth - 20, totalY + 1, { align: 'right' });
+
+      // Payment Details Side-note
+      doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.text('Payment Information:', 15, totalY + 25);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(120, 120, 120);
+      doc.text(`Method: ${getPaymentModeLabel(inv.gateway || 'MANUAL')}`, 15, totalY + 31);
+      doc.text('Please quote invoice number on all bank transactions.', 15, totalY + 36);
+
+      // Footer
+      doc.setFontSize(7.5);
+      doc.setFont('helvetica', 'italic');
+      doc.setTextColor(180, 180, 180);
+      doc.text('Thank you for choosing Shaarvik Technologies.', pageWidth/2, 280, { align: 'center' });
+      doc.text('This is an electronically generated invoice.', pageWidth/2, 284, { align: 'center' });
+
+      doc.save(`Invoice_${inv.invoiceNumber}.pdf`);
+      success('Premium invoice downloaded.');
+    } catch (err: any) {
+      console.error('PDF error:', err);
+      toastError('Download failed.');
+    }
+  };
+
   const handleAddPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!paymentInvoice) return;
@@ -162,46 +337,12 @@ export default function InvoicesPage() {
     setPaying(true);
     setPayError(null);
     try {
-      const supabase = createClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      debug.authCheck('invoices:payment', user?.id ?? null);
-      if (!user) { setPayError('You must be logged in.'); setPaying(false); return; }
+      debug.authCheck('invoices:payment', userId);
+      if (!userId) { setPayError('You must be logged in.'); setPaying(false); return; }
 
-      const paymentPayload = {
-        invoice_id: paymentInvoice.id,
-        amount: amt,
-        payment_date: payDate,
-        payment_method: payMethod,
-        reference_number: payRef.trim() || null,
-        notes: payNotes.trim() || null,
-        created_by: user?.id || null,
-      };
-      debug.dbRequest('invoices', 'INSERT', 'invoice_payments', paymentPayload);
-      const { error } = await supabase.from('invoice_payments').insert(paymentPayload);
-      if (error) {
-        debug.dbError('invoices', 'INSERT', 'invoice_payments', error);
-        setPayError(error.message);
-        setPaying(false);
-        return;
-      }
-      debug.dbSuccess('invoices', 'INSERT', 'invoice_payments', { invoice_id: paymentInvoice.id, amount: amt });
-      await logAction({
-        action: 'payment_created',
-        module: 'Billing',
-        description: `Payment of ${fmt(amt)} recorded for invoice ${paymentInvoice.invoiceNumber} (${paymentInvoice.companyName})`,
-        user_id: user?.id,
-        metadata: {
-          invoice_id: paymentInvoice.id,
-          invoice_number: paymentInvoice.invoiceNumber,
-          client: paymentInvoice.companyName,
-          amount: amt,
-          method: payMethod,
-          reference: payRef.trim() || null,
-        },
-      });
+      // TODO: Implement MySQL migration for invoice_payments table
+      toastError("Manual payment recording is currently being migrated to MySQL. Please check back soon.");
       setPaymentInvoice(null);
-      success(`Payment of ${fmt(amt)} recorded successfully!`);
-      fetchInvoices();
     } catch (err: any) {
       setPayError(err?.message || 'Payment failed.');
     }
@@ -310,8 +451,9 @@ export default function InvoicesPage() {
                   <th className="text-right px-4 py-3 text-xs font-600 text-muted-foreground uppercase tracking-wide whitespace-nowrap">Paid</th>
                   <th className="text-right px-4 py-3 text-xs font-600 text-muted-foreground uppercase tracking-wide whitespace-nowrap">Balance</th>
                   <th className="text-left px-4 py-3 text-xs font-600 text-muted-foreground uppercase tracking-wide whitespace-nowrap">Status</th>
+                  <th className="text-left px-4 py-3 text-xs font-600 text-muted-foreground uppercase tracking-wide whitespace-nowrap">Mode</th>
                   <th className="text-left px-4 py-3 text-xs font-600 text-muted-foreground uppercase tracking-wide whitespace-nowrap">Created</th>
-                  <th className="text-left px-4 py-3 text-xs font-600 text-muted-foreground uppercase tracking-wide whitespace-nowrap">Actions</th>
+                  <th className="text-right px-4 py-3 text-xs font-600 text-muted-foreground uppercase tracking-wide whitespace-nowrap">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -322,41 +464,55 @@ export default function InvoicesPage() {
                   const isDueSoon = inv.status === 'pending' && daysLeft !== null && daysLeft >= 0 && daysLeft <= 7;
                   return (
                     <tr key={inv.id} className={`hover:bg-muted/20 transition-colors ${isOverdueRow ? 'bg-red-50/30' : ''}`}>
-                      <td className="px-4 py-3 whitespace-nowrap">
+                      <td className="px-4 py-3 text-left whitespace-nowrap">
                         <span className="font-600 text-foreground text-xs">{inv.invoiceNumber}</span>
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap">
+                      <td className="px-4 py-3 text-left whitespace-nowrap">
                         <span className="text-xs font-500 text-foreground">{inv.companyName}</span>
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-xs text-muted-foreground">{inv.companyEmail}</td>
+                      <td className="px-4 py-3 text-left whitespace-nowrap text-xs text-muted-foreground">{inv.companyEmail}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-right text-xs font-600 text-foreground">{fmt(inv.finalAmount || inv.amount)}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-right text-xs font-500 text-green-600">{fmt(inv.paidAmount)}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-right text-xs font-600 text-red-600">{fmt(inv.balanceAmount)}</td>
-                      <td className="px-4 py-3 whitespace-nowrap">
+                      <td className="px-4 py-3 text-left whitespace-nowrap">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-600 border ${sc.color}`}>
                           {sc.label}
                         </span>
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap">
+                      <td className="px-4 py-3 text-left whitespace-nowrap">
+                        <span className="text-[11px] font-500 text-muted-foreground">
+                          {(inv.gateway?.toLowerCase() === 'razorpay' || inv.gateway?.toLowerCase() === 'online') ? 'ONLINE' : 'OFFLINE'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-left whitespace-nowrap">
                         <span className={`text-xs ${isOverdueRow ? 'text-red-600 font-600' : isDueSoon ? 'text-amber-600 font-500' : 'text-muted-foreground'}`}>
                           {inv.createdAt ? new Date(inv.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : ''}
                           {isDueSoon && daysLeft !== null && <span className="ml-1">({daysLeft}d)</span>}
                         </span>
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        {inv.status !== 'paid' && inv.status !== 'cancelled' && inv.balanceAmount > 0 && (
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        <div className="flex items-center justify-end gap-2">
+                          {inv.status !== 'paid' && inv.status !== 'cancelled' && inv.balanceAmount > 0 && (
+                            <button
+                              onClick={() => openPaymentModal(inv)}
+                              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-600 bg-primary text-white hover:bg-primary/90 transition-colors"
+                            >
+                              <DollarSign size={10} /> Add Payment
+                            </button>
+                          )}
+                          {inv.status === 'paid' && (
+                            <span className="flex items-center gap-1 text-[11px] text-green-600 font-500 mr-2">
+                              <CheckCircle size={11} /> Paid
+                            </span>
+                          )}
                           <button
-                            onClick={() => openPaymentModal(inv)}
-                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-600 bg-primary text-white hover:bg-primary/90 transition-colors"
+                            onClick={() => handleDownloadPDF(inv)}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-600 border border-border bg-white text-foreground hover:bg-muted transition-colors"
+                            title="Download PDF"
                           >
-                            <DollarSign size={10} /> Add Payment
+                            <Download size={11} /> Download
                           </button>
-                        )}
-                        {inv.status === 'paid' && (
-                          <span className="flex items-center gap-1 text-[11px] text-green-600 font-500">
-                            <CheckCircle size={11} /> Paid
-                          </span>
-                        )}
+                        </div>
                       </td>
                     </tr>
                   );

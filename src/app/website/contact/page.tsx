@@ -5,17 +5,57 @@ import React, { useState } from 'react';
 interface FormState {
   name: string;
   email: string;
+  company: string;
   phone: string;
   message: string;
+  platformId: string;
+  saasPlanId: string;
+}
+
+interface Platform {
+  id: number;
+  name: string;
+}
+
+interface Plan {
+  id: number;
+  platform_id: number;
+  name: string;
+  price: string;
+  billing_cycle: string;
 }
 
 export default function ContactPage() {
-  const [form, setForm] = useState<FormState>({ name: '', email: '', phone: '', message: '' });
+  const [form, setForm] = useState<FormState>({ 
+    name: '', email: '', company: '', phone: '', message: '',
+    platformId: '', saasPlanId: ''
+  });
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
+  
+  const [platforms, setPlatforms] = useState<Platform[]>([]);
+  const [allPlans, setAllPlans] = useState<Plan[]>([]);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+  React.useEffect(() => {
+    fetch('/api/public/config')
+      .then(res => res.json())
+      .then(data => {
+        if (data.platforms) setPlatforms(data.platforms);
+        if (data.plans) setAllPlans(data.plans);
+      })
+      .catch(err => console.error('Failed to load config:', err));
+  }, []);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+    const { name, value } = e.target;
+    setForm((prev) => {
+      const newState = { ...prev, [name]: value };
+      // Reset plan if platform changes
+      if (name === 'platformId') {
+        newState.saasPlanId = '';
+      }
+      return newState;
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -47,8 +87,11 @@ export default function ContactPage() {
         body: JSON.stringify({
           name: sanitizedName,
           email: form.email.trim(),
+          company: form.company.trim(),
           phone: form.phone.trim(),
           message: form.message.trim(),
+          platformId: form.platformId || null,
+          saasPlanId: form.saasPlanId || null,
         }),
       });
 
@@ -58,7 +101,10 @@ export default function ContactPage() {
       }
 
       setStatus('success');
-      setForm({ name: '', email: '', phone: '', message: '' });
+      setForm({ 
+        name: '', email: '', company: '', phone: '', message: '',
+        platformId: '', saasPlanId: '' 
+      });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Something went wrong. Please try again.';
       setErrorMsg(message);
@@ -188,20 +234,79 @@ export default function ContactPage() {
                       />
                     </div>
 
-                    <div>
-                      <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1.5">
-                        Email Address <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        id="email"
-                        name="email"
-                        type="email"
-                        value={form.email}
-                        onChange={handleChange}
-                        placeholder="you@company.com"
-                        className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                        required
-                      />
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      <div>
+                        <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1.5">
+                          Email Address <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          id="email"
+                          name="email"
+                          type="email"
+                          value={form.email}
+                          onChange={handleChange}
+                          placeholder="you@company.com"
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                          required
+                        />
+                      </div>
+
+                      <div>
+                        <label htmlFor="company" className="block text-sm font-medium text-gray-700 mb-1.5">
+                          Company Name
+                        </label>
+                        <input
+                          id="company"
+                          name="company"
+                          type="text"
+                          value={form.company}
+                          onChange={handleChange}
+                          placeholder="Your Organization"
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      <div>
+                        <label htmlFor="platformId" className="block text-sm font-medium text-gray-700 mb-1.5">
+                          Interested Platform (Optional)
+                        </label>
+                        <select
+                          id="platformId"
+                          name="platformId"
+                          value={form.platformId}
+                          onChange={handleChange}
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all bg-white"
+                        >
+                          <option value="">Select a Platform</option>
+                          {platforms.map(p => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label htmlFor="saasPlanId" className="block text-sm font-medium text-gray-700 mb-1.5">
+                          Preferred Plan (Optional)
+                        </label>
+                        <select
+                          id="saasPlanId"
+                          name="saasPlanId"
+                          value={form.saasPlanId}
+                          onChange={handleChange}
+                          disabled={!form.platformId}
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all bg-white disabled:bg-gray-50"
+                        >
+                          <option value="">Select a Plan</option>
+                          {allPlans
+                            .filter(p => p.platform_id === Number(form.platformId))
+                            .map(p => (
+                              <option key={p.id} value={p.id}>{p.name} - Rs. {p.price}/{p.billing_cycle}</option>
+                            ))
+                          }
+                        </select>
+                      </div>
                     </div>
 
                     <div>

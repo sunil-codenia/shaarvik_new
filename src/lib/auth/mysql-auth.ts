@@ -303,6 +303,49 @@ export async function createAuthUserWithCompany(input: {
   }
 }
 
+export async function createStaffUser(input: {
+  email: string;
+  passwordHash: string;
+  fullName: string;
+  phone?: string | null;
+  roleId: string | null;
+  companyId?: string | null;
+  status?: string;
+}) {
+  const connection = await mysqlPool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const [userResult] = await connection.query<any>(
+      'INSERT INTO `User` (email, passwordHash) VALUES (?, ?)',
+      [input.email.trim().toLowerCase(), input.passwordHash]
+    );
+    const userId = userResult.insertId;
+
+    const [profileResult] = await connection.query<any>(
+      `INSERT INTO profiles (userId, email, phone, fullName, role, roleId, companyId, status)
+       VALUES (?, ?, ?, ?, 'staff', ?, ?, ?)`,
+      [
+        userId,
+        input.email.trim().toLowerCase(),
+        input.phone || null,
+        input.fullName.trim(),
+        input.roleId ? Number(input.roleId) : null,
+        input.companyId ? Number(input.companyId) : null,
+        input.status || 'active'
+      ]
+    );
+
+    await connection.commit();
+    return { userId, profileId: profileResult.insertId };
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
 export async function getPermissionsForUser(userId: string) {
   const user = await getAuthUserById(userId);
   if (!user) return { isAdmin: false, permissions: [] };
@@ -343,4 +386,11 @@ export async function getPermissionsForUser(userId: string) {
       canDelete: Boolean(row.canDelete),
     })),
   };
+}
+
+export async function updateUserPassword(userId: string, passwordHash: string) {
+  await mysqlPool.query(
+    'UPDATE `User` SET passwordHash = ? WHERE id = ?',
+    [passwordHash, userId]
+  );
 }

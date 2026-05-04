@@ -11,7 +11,7 @@ const products = [
     status: 'Live',
     statusColor: 'bg-green-100 text-green-700',
     features: ['Task & Project Tracking', 'Cost & Budget Control', 'Labour Management', 'Reports & Analytics'],
-    href: '/website/buildarya',
+    href: 'https://buildarya.com/',
     gradient: 'from-blue-600 to-blue-800',
     icon: '🏗️',
   },
@@ -126,7 +126,7 @@ export default function ProductsPage() {
           <p className="text-gray-500 mb-7">Our flagship product is live and ready for your business.</p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <Link
-              href="/website/buildarya"
+              href="https://buildarya.com/"
               className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition-colors shadow-sm"
             >
               Explore Buildarya

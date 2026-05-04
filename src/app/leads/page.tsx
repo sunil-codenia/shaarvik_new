@@ -2,10 +2,18 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Plus, Search, TrendingUp, Phone, X, ChevronRight, MessageCircle, UserCheck, StickyNote, Edit2, Trash2, Activity, ChevronDown, Calendar, Filter, ArrowLeft, Building2, CreditCard, FileText } from 'lucide-react';
 import { useToast } from '@/components/ui/Toast';
 import { useTheme } from '@/contexts/ThemeContext';
+import Script from 'next/script';
+
+declare global {
+  interface Window {
+    Razorpay: any;
+  }
+}
+
 
 interface Lead {
   id: string;
@@ -46,7 +54,7 @@ interface ConvertForm {
   billingEmail: string;
   saasPlanId: string;
   billingCycle: 'monthly' | 'quarterly' | 'yearly';
-  paymentMode: 'online' | 'bank_transfer' | 'cash' | 'cheque' | 'upi';
+  paymentMode: 'online' | 'bank_transfer' | 'cash' | 'cheque' | 'upi' | 'razorpay' | 'stripe';
   amount: string;
   notes: string;
 }
@@ -167,32 +175,59 @@ export default function LeadsPage() {
     }
   }, [leads.length, toastError]);
 
+  const searchParams = useSearchParams();
+
   useEffect(() => {
-    loadLeads();
-  }, [loadLeads]);
+    const payment = searchParams.get('payment');
+    const sessionId = searchParams.get('session_id');
 
-  const loadActivities = useCallback(async (leadId: string) => {
-    setLoadingActivities(true);
-    try {
-      const response = await fetch(`/api/mysql/activities?leadId=${encodeURIComponent(leadId)}`, {
-        headers: { Accept: 'application/json' },
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to load activities');
-
-      setActivities((Array.isArray(data) ? data : []).map((a: any) => ({
-        id: a.id, 
-        type: a.type, 
-        summary: a.summary, 
-        notes: a.notes,
-        activityDate: a.activity_date || a.activityDate,
-      })));
-    } catch {
-      setActivities([]);
-    } finally {
-      setLoadingActivities(false);
+    if (payment === 'success' && sessionId) {
+      const verifyAndFinalize = async () => {
+        setConverting(true);
+        try {
+          const responseVerify = await fetch(`/api/payments/stripe/verify-session?session_id=${sessionId}`, {
+            headers: { Accept: 'application/json' },
+          });
+          const verify = await responseVerify.json();
+          
+          if (verify.success && verify.metadata.type === 'conversion') {
+            const m = verify.metadata;
+            // Reconstruct the conversion payload
+            const resConv = await fetch('/api/leads/convert', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                leadId: m.itemId,
+                address: m.address || null,
+                gstNumber: m.gstNumber || null,
+                billingEmail: m.billingEmail || null,
+                saasPlanId: m.saasPlanId || null,
+                billingCycle: m.billingCycle,
+                paymentMode: 'stripe',
+                amount: verify.amount_total,
+                notes: 'Lead converted after Stripe payment',
+                transactionId: sessionId,
+                gateway: 'stripe',
+              }),
+            });
+            const dataConv = await resConv.json();
+            if (!resConv.ok) throw new Error(dataConv.error || 'Conversion failed');
+            
+            toastSuccess('Payment successful! Lead converted to client.');
+            router.replace('/clients');
+          }
+        } catch (err: any) {
+          setConvertError('Payment verification failed: ' + err.message);
+        } finally {
+          setConverting(false);
+        }
+      };
+      verifyAndFinalize();
+    } else if (payment === 'cancel') {
+      toastError('Payment was cancelled.');
+      router.replace('/leads');
     }
-  }, []);
+  }, [searchParams, router, toastSuccess, toastError]);
 
   const loadSaasPlans = useCallback(async () => {
     setLoadingPlans(true);
@@ -217,6 +252,35 @@ export default function LeadsPage() {
       setLoadingPlans(false);
     }
   }, []);
+
+  useEffect(() => {
+    loadLeads();
+    loadSaasPlans();
+  }, [loadLeads, loadSaasPlans]);
+
+  const loadActivities = useCallback(async (leadId: string) => {
+    setLoadingActivities(true);
+    try {
+      const response = await fetch(`/api/mysql/activities?leadId=${encodeURIComponent(leadId)}`, {
+        headers: { Accept: 'application/json' },
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to load activities');
+
+      setActivities((Array.isArray(data) ? data : []).map((a: any) => ({
+        id: a.id, 
+        type: a.type, 
+        summary: a.summary, 
+        notes: a.notes,
+        activityDate: a.activity_date || a.activityDate,
+      })));
+    } catch {
+      setActivities([]);
+    } finally {
+      setLoadingActivities(false);
+    }
+  }, []);
+
 
   const handleSelectLead = (lead: Lead) => {
     setSelectedLead(lead);
@@ -301,11 +365,69 @@ export default function LeadsPage() {
     setConvertError(null);
     setConverting(true);
     try {
+      const plan = saasPlans.find(p => p.id === convertForm.saasPlanId);
+      const planName = plan ? plan.name : 'Subscription';
+      const amount = parseFloat(String(convertForm.amount).replace(/,/g, '')) || 0;
+
+      // --- 1. Handle Razorpay ---
+      if (convertForm.paymentMode === 'razorpay') {
+        const orderRes = await fetch('/api/payments/razorpay/create-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ amount, receipt: `conv_${selectedLead.id}` }),
+        });
+        const orderData = await orderRes.json();
+        if (!orderRes.ok) throw new Error(orderData.error || 'Failed to create Razorpay order');
+
+        const options = {
+          key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_test_SfhYBnCq9j5Qaf',
+          order_id: orderData.id,
+          name: 'Shaarvik Technologies',
+          description: `Subscription: ${planName}`,
+          image: '/logo.png',
+          handler: async (response: any) => {
+            try {
+              const vRes = await fetch('/api/payments/razorpay/verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(response),
+              });
+              const vData = await vRes.json();
+              if (!vRes.ok) throw new Error(vData.error || 'Verification failed');
+              await finalizeConversion(response.razorpay_payment_id, 'razorpay');
+            } catch (err: any) {
+              setConvertError('Payment verification failed.');
+              setConverting(false);
+            }
+          },
+          prefill: {
+            name: selectedLead.full_name || '',
+            email: selectedLead.email || '',
+          },
+          theme: { color: '#9333ea' },
+          modal: { ondismiss: () => setConverting(false) }
+        };
+        const rzp = new window.Razorpay(options);
+        rzp.open();
+        return;
+      }
+
+      // --- 3. Default (Offline) ---
+      await finalizeConversion(null, 'manual');
+
+    } catch (err: any) {
+      setConvertError(err?.message || 'Failed to convert lead.');
+      setConverting(false);
+    }
+  };
+
+  const finalizeConversion = async (tid: string | null, gateway: string) => {
+    try {
       const res = await fetch('/api/leads/convert', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          leadId: selectedLead.id,
+          leadId: selectedLead?.id,
           address: convertForm.address || null,
           gstNumber: convertForm.gstNumber || null,
           billingEmail: convertForm.billingEmail || null,
@@ -314,6 +436,8 @@ export default function LeadsPage() {
           paymentMode: convertForm.paymentMode,
           amount: convertForm.amount ? Number(convertForm.amount) : null,
           notes: convertForm.notes || null,
+          transactionId: tid,
+          gateway: gateway,
         }),
       });
       const data = await res.json();
@@ -322,11 +446,12 @@ export default function LeadsPage() {
       setShowConvertModal(false);
       router.push('/clients');
     } catch (err: any) {
-      setConvertError(err?.message || 'Failed to convert lead.');
+      setConvertError(err?.message || 'Failed to finalize conversion.');
     } finally {
       setConverting(false);
     }
   };
+
 
   const selectedPlan = saasPlans.find(p => p.id === convertForm.saasPlanId);
 
@@ -361,6 +486,7 @@ export default function LeadsPage() {
   const labelCls = `block text-xs font-semibold mb-1 ${dk ? 'text-gray-400' : 'text-gray-600'}`;
 
   return (
+    <>
       <div className={`h-[calc(100vh-64px)] flex flex-col ${dk ? 'bg-gray-950' : 'bg-gray-50'}`}>
         {/* Top Bar */}
         <div className={`flex-shrink-0 flex items-center justify-between px-4 lg:px-6 py-3 border-b ${dk ? 'bg-gray-900 border-gray-800' : 'bg-white border-gray-200'}`}>
@@ -894,11 +1020,32 @@ export default function LeadsPage() {
                     <div className="space-y-3">
                       <div>
                         <label className={labelCls}>Payment Mode</label>
-                        <div className="grid grid-cols-3 gap-2">
-                          {(['online', 'upi', 'bank_transfer', 'cash', 'cheque'] as const).map(mode => (
+                        <div className="grid grid-cols-4 gap-2">
+                          {(['razorpay', 'online', 'upi'] as const).map(mode => (
                             <label
                               key={mode}
-                              className={`flex items-center justify-center px-2 py-2 rounded-lg border-2 cursor-pointer text-xs font-semibold transition-all ${
+                              className={`flex flex-col items-center justify-center px-2 py-2 rounded-lg border-2 cursor-pointer text-[10px] font-bold transition-all ${
+                                convertForm.paymentMode === mode
+                                  ? (mode === 'razorpay' ? 'border-blue-600 bg-blue-50 text-blue-700' : mode === 'stripe' ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-primary bg-primary/10 text-primary')
+                                  : dk ?'border-gray-700 text-gray-400 hover:border-gray-600' : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                              }`}
+                            >
+                              <input
+                                type="radio"
+                                name="paymentMode"
+                                value={mode}
+                                checked={convertForm.paymentMode === mode}
+                                onChange={() => setConvertForm(f => ({ ...f, paymentMode: mode }))}
+                                className="sr-only"
+                              />
+                              <CreditCard size={14} className="mb-1" />
+                              {mode === 'razorpay' ? 'Razorpay' : mode === 'stripe' ? 'Stripe' : mode === 'online' ? 'NetBank' : mode.toUpperCase()}
+                            </label>
+                          ))}
+                          {(['bank_transfer', 'cash', 'cheque'] as const).map(mode => (
+                            <label
+                              key={mode}
+                              className={`flex flex-col items-center justify-center px-1 py-2 rounded-lg border-2 cursor-pointer text-[10px] font-bold transition-all ${
                                 convertForm.paymentMode === mode
                                   ? 'border-primary bg-primary/10 text-primary' : dk ?'border-gray-700 text-gray-400 hover:border-gray-600' : 'border-gray-200 text-gray-600 hover:border-gray-300'
                               }`}
@@ -989,5 +1136,8 @@ export default function LeadsPage() {
           </div>
         )}
       </div>
+      <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="lazyOnload" />
+    </>
   );
 }
+

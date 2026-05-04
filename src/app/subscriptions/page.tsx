@@ -1,9 +1,18 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Search, RefreshCw, CheckCircle, Clock, Ban, ChevronDown, X, Trash2, DollarSign, Package, Filter, Bell, BellOff, Send, AlertCircle } from 'lucide-react';
+import { Plus, Search, RefreshCw, CheckCircle, Clock, Ban, ChevronDown, X, Trash2, DollarSign, Package, Filter, Bell, BellOff, Send, AlertCircle, History, Zap, CreditCard } from 'lucide-react';
+import Script from 'next/script';
 import { useToast } from '@/components/ui/Toast';
 import { useCompanyId } from '@/hooks/useCompanyId';
+import { useSearchParams, useRouter } from 'next/navigation';
+
+declare global {
+  interface Window {
+    Razorpay: any;
+  }
+}
+
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -404,6 +413,15 @@ export default function SubscriptionsPage() {
   // Reminders panel state
   const [reminderSubId, setReminderSubId] = useState<string | null>(null);
 
+  // History & Renewal state
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [historySubId, setHistorySubId] = useState<string | null>(null);
+  const [subscriptionHistory, setSubscriptionHistory] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  const [showRenewModal, setShowRenewModal] = useState(false);
+  const [renewSubId, setRenewSubId] = useState<string | null>(null);
+
   // ── Load data ──────────────────────────────────────────────────────────────
 
   const loadData = useCallback(async () => {
@@ -454,6 +472,56 @@ export default function SubscriptionsPage() {
       setLoading(false);
     }
   }, [toastError]);
+
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
+  useEffect(() => {
+    const payment = searchParams.get('payment');
+    const sessionId = searchParams.get('session_id');
+
+    if (payment === 'success' && sessionId) {
+      const verifyAndFinalize = async () => {
+        setLoading(true);
+        try {
+          const verify = await fetchJson<any>(`/api/payments/stripe/verify-session?session_id=${sessionId}`);
+          if (verify.success && verify.metadata.type === 'subscription') {
+            const m = verify.metadata;
+            // Reconstruct the renewal payload
+            await fetchJson<any>('/api/mysql/subscriptions/renew', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                subscriptionId: m.itemId,
+                newPlanId: m.saasPlanId || null,
+                billingCycle: m.billingCycle,
+                startDate: m.startDate,
+                endDate: m.endDate,
+                amount: verify.amount_total,
+                amountPaid: verify.amount_total,
+                paymentMode: 'stripe',
+                notes: 'Renewal finalized after Stripe payment',
+                transactionId: sessionId,
+                gateway: 'stripe',
+              }),
+            });
+            success('Payment successful! Subscription updated.');
+            // Clean URL
+            router.replace('/subscriptions');
+            await loadData();
+          }
+        } catch (err: any) {
+          toastError('Payment verification failed: ' + err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+      verifyAndFinalize();
+    } else if (payment === 'cancel') {
+      toastError('Payment was cancelled.');
+      router.replace('/subscriptions');
+    }
+  }, [searchParams, router, success, toastError, loadData]);
 
   useEffect(() => {
     if (profileLoading) return;
@@ -592,6 +660,136 @@ export default function SubscriptionsPage() {
       success('Status updated.');
     } catch (err: any) {
       toastError(err?.message || 'Failed to update status.');
+    }
+  };
+
+  // ── History ───────────────────────────────────────────────────────────────
+
+  const openHistory = useCallback(async (subId: string) => {
+    setHistorySubId(subId);
+    setShowHistoryModal(true);
+    setLoadingHistory(true);
+    try {
+      const data = await fetchJson<any[]>(`/api/mysql/subscriptions/history?id=${subId}`);
+      setSubscriptionHistory(data || []);
+    } catch (err: any) {
+      toastError(err.message || 'Failed to load history.');
+    } finally {
+      setLoadingHistory(false);
+    }
+  }, [toastError]);
+
+  // ── Renew / Upgrade ────────────────────────────────────────────────────────
+
+  const openRenew = (sub: Subscription) => {
+    setRenewSubId(sub.id);
+    setForm({
+      clientId: sub.clientId,
+      saasPlanId: sub.saasPlanId || '',
+      billingCycle: sub.billingCycle as SubscriptionForm['billingCycle'],
+      startDate: new Date().toISOString().split('T')[0], // Default to today for renewal
+      endDate: calcEndDate(new Date().toISOString().split('T')[0], sub.billingCycle),
+      status: 'active',
+      paymentMode: 'online',
+      amount: String(sub.amount),
+      amountPaid: String(sub.amount),
+      notes: '',
+    });
+    setFormError(null);
+    setShowRenewModal(true);
+  };
+
+  const handleRenew = async () => {
+    if (!renewSubId) return;
+    setFormError(null);
+    setSaving(true);
+    try {
+      const sub = subscriptions.find(s => s.id === renewSubId);
+      const plan = plans.find(p => p.id === form.saasPlanId);
+      const planName = plan ? plan.name : sub?.planName || 'Plan Update';
+
+      // --- 1. Handle Razorpay ---
+      if (form.paymentMode === 'razorpay') {
+        const orderData = await fetchJson<any>('/api/payments/razorpay/create-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount: parseFloat(String(form.amount).replace(/,/g, '')),
+            receipt: `renew_${renewSubId}_${Date.now()}`
+          }),
+        });
+
+        const options = {
+          key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_test_SfhYBnCq9j5Qaf',
+          order_id: orderData.id,
+          name: 'Shaarvik Technologies',
+          description: `Subscription Renewal: ${planName}`,
+          image: '/logo.png',
+          handler: async (response: any) => {
+            try {
+              await fetchJson('/api/payments/razorpay/verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(response),
+              });
+              await finalizeRenewal(response.razorpay_payment_id, 'razorpay');
+            } catch (err: any) {
+              setFormError('Payment verification failed. Please contact support.');
+              setSaving(false);
+            }
+          },
+          prefill: {
+            name: sub?.clientName || '',
+            email: sub?.clientEmail || '',
+          },
+          theme: { color: '#2563eb' },
+          modal: { ondismiss: () => setSaving(false) }
+        };
+
+        const rzp = new window.Razorpay(options);
+        rzp.open();
+        return; // Wait for handler
+      }
+
+
+      // --- 3. Handle Offline ---
+      await finalizeRenewal(null, 'manual');
+
+    } catch (err: any) {
+      setFormError(err.message || 'Failed to initiate renewal.');
+      setSaving(false);
+    }
+  };
+
+  const finalizeRenewal = async (tid: string | null, gateway: string) => {
+    try {
+      const payload = {
+        subscriptionId: renewSubId,
+        newPlanId: form.saasPlanId || null,
+        billingCycle: form.billingCycle,
+        startDate: form.startDate,
+        endDate: form.endDate,
+        amount: parseFloat(String(form.amount).replace(/,/g, '')) || 0,
+        amountPaid: parseFloat(String(form.amountPaid).replace(/,/g, '')) || 0,
+        paymentMode: form.paymentMode,
+        notes: form.notes,
+        transactionId: tid,
+        gateway: gateway,
+      };
+
+      const res = await fetchJson<any>('/api/mysql/subscriptions/renew', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      success(res.message || 'Subscription updated successfully.');
+      setShowRenewModal(false);
+      await loadData();
+    } catch (err: any) {
+      setFormError(err.message || 'Failed to finalize renewal.');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -831,24 +1029,36 @@ export default function SubscriptionsPage() {
                           </button>
                         </td>
                         <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <select
-                              value={s.status}
-                              onChange={e => handleStatusChange(s.id, e.target.value)}
-                              className="text-xs border border-border rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/30"
-                            >
-                              <option value="active">Active</option>
-                              <option value="expired">Expired</option>
-                              <option value="cancelled">Cancelled</option>
-                            </select>
-                            <button
-                              onClick={() => handleDelete(s.id)}
-                              disabled={deletingId === s.id}
-                              className="p-1.5 rounded-md hover:bg-red-50 text-muted-foreground hover:text-red-600 transition-colors disabled:opacity-50"
-                              title="Delete"
-                            >
-                              <Trash2 size={13} />
-                            </button>
+                          <div className="flex items-center justify-end gap-2 text-right">
+                             <button
+                               onClick={() => openHistory(s.id)}
+                               className="p-1.5 rounded-md hover:bg-blue-50 text-muted-foreground hover:text-blue-600 transition-colors"
+                               title="View History (Ledger)"
+                             >
+                               <History size={13} />
+                             </button>
+                             <button
+                               onClick={() => openEdit(s)}
+                               className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                               title="Edit"
+                             >
+                               <RefreshCw size={13} />
+                             </button>
+                             <button
+                               onClick={() => openRenew(s)}
+                               className="p-1.5 rounded-md hover:bg-amber-50 text-muted-foreground hover:text-amber-600 transition-colors"
+                               title="Renew / Upgrade / Degrade"
+                             >
+                               <Zap size={13} />
+                             </button>
+                             <button
+                               onClick={() => handleDelete(s.id)}
+                               disabled={deletingId === s.id}
+                               className="p-1.5 rounded-md hover:bg-red-50 text-muted-foreground hover:text-red-600 transition-colors disabled:opacity-50"
+                               title="Delete"
+                             >
+                               <Trash2 size={13} />
+                             </button>
                           </div>
                         </td>
                       </tr>
@@ -1135,6 +1345,260 @@ export default function SubscriptionsPage() {
           </div>
         </div>
       )}
+      {/* ── Renew / Upgrade Modal ────────────────────────────────────────────── */}
+      {showRenewModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)' }}
+          onClick={e => { if (e.target === e.currentTarget) setShowRenewModal(false); }}
+        >
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-amber-50/30">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
+                  <Zap size={20} />
+                </div>
+                <div>
+                  <h2 className="text-lg font-600 text-foreground">Renew / Update Subscription</h2>
+                  <p className="text-xs text-muted-foreground mt-0.5">Change plans, billing cycles, or extend dates</p>
+                </div>
+              </div>
+              <button onClick={() => setShowRenewModal(false)} className="p-2 rounded-lg text-muted-foreground hover:bg-muted transition-colors">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="px-6 py-5 space-y-5">
+              {formError && <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-600">{formError}</div>}
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-600 text-muted-foreground mb-1.5 uppercase tracking-wide">Client</label>
+                  <p className="px-3 py-2.5 bg-muted/30 border border-border rounded-lg text-sm text-foreground opacity-70">
+                    {clients.find(c => c.id === form.clientId)?.display_name || 'Selected Client'}
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-xs font-600 text-muted-foreground mb-1.5 uppercase tracking-wide">New Plan</label>
+                  <select
+                    value={form.saasPlanId}
+                    onChange={e => handlePlanChange(e.target.value)}
+                    className="w-full px-3 py-2.5 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary text-foreground"
+                  >
+                    <option value="">No plan selected</option>
+                    {plans.map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.platform_name ? `${p.platform_name} — ` : ''}{p.name} (₹{p.price.toLocaleString('en-IN')})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-600 text-muted-foreground mb-1.5 uppercase tracking-wide">Billing Cycle</label>
+                <div className="flex gap-2">
+                  {BILLING_CYCLES.map(c => (
+                    <button
+                      key={c.value}
+                      onClick={() => handleCycleChange(c.value as any)}
+                      className={`flex-1 py-2 text-sm font-500 rounded-lg border-2 transition-all ${
+                        form.billingCycle === c.value ? 'border-primary bg-primary/5 text-primary' : 'border-border text-muted-foreground hover:border-primary/40'
+                      }`}
+                    >
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-600 text-muted-foreground mb-1.5 uppercase tracking-wide">Effective Date</label>
+                  <input
+                    type="date"
+                    value={form.startDate}
+                    onChange={e => handleStartDateChange(e.target.value)}
+                    className="w-full px-3 py-2.5 text-sm border border-border rounded-lg text-foreground focus:ring-2 focus:ring-primary/20"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-600 text-muted-foreground mb-1.5 uppercase tracking-wide">New Expiry Date</label>
+                  <input
+                    type="date"
+                    value={form.endDate}
+                    onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))}
+                    className="w-full px-3 py-2.5 text-sm border border-border rounded-lg text-foreground focus:ring-2 focus:ring-primary/20"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-600 text-muted-foreground mb-1.5 uppercase tracking-wide">Renewal / Upgrade Amount (₹)</label>
+                <input
+                  type="number"
+                  value={form.amount}
+                  onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
+                  className="w-full px-3 py-2.5 text-sm border border-border rounded-lg text-foreground focus:ring-2 focus:ring-primary/20"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-600 text-muted-foreground mb-1.5 uppercase tracking-wide">Payment Gateway</label>
+                <div className="grid grid-cols-3 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setForm(f => ({ ...f, paymentMode: 'offline' }))}
+                    className={`flex flex-col items-center justify-center p-3 rounded-xl border-2 transition-all ${
+                      form.paymentMode === 'offline' ? 'border-primary bg-primary/5 text-primary' : 'border-border text-muted-foreground hover:bg-muted/50'
+                    }`}
+                  >
+                    <Clock size={18} className="mb-1" />
+                    <span className="text-[11px] font-semibold">Offline</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setForm(f => ({ ...f, paymentMode: 'razorpay' }))}
+                    className={`flex flex-col items-center justify-center p-3 rounded-xl border-2 transition-all ${
+                      form.paymentMode === 'razorpay' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-border text-muted-foreground hover:bg-muted/50'
+                    }`}
+                  >
+                    <CreditCard size={18} className="mb-1" />
+                    <span className="text-[11px] font-semibold">Razorpay</span>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-600 text-muted-foreground mb-1.5 uppercase tracking-wide">Reason / Notes</label>
+                <textarea
+                  value={form.notes}
+                  onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+                  rows={2}
+                  placeholder="e.g. Client requested upgrade to annual billing..."
+                  className="w-full px-3 py-2.5 text-sm border border-border rounded-lg text-foreground focus:ring-2 focus:ring-primary/20 resize-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border bg-muted/20">
+              <button onClick={() => setShowRenewModal(false)} className="px-4 py-2 text-sm text-muted-foreground hover:text-foreground">Cancel</button>
+              <button
+                onClick={handleRenew}
+                disabled={saving}
+                className="flex items-center gap-2 px-6 py-2.5 text-sm bg-amber-600 text-white rounded-xl font-600 hover:bg-amber-700 transition-all shadow-lg active:scale-95 disabled:opacity-50"
+              >
+                {saving ? (
+                  <><RefreshCw size={14} className="animate-spin" /> Processing…</>
+                ) : (
+                  <><Zap size={14} /> {form.paymentMode === 'offline' ? 'Confirm Renewal' : `Pay ₹${Number(form.amount).toLocaleString('en-IN')}`}</>
+                )}
+              </button>
+
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── History Ledger Modal ──────────────────────────────────────────────── */}
+      {showHistoryModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)' }}
+          onClick={e => { if (e.target === e.currentTarget) setShowHistoryModal(false); }}
+        >
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
+                  <History size={20} />
+                </div>
+                <div>
+                  <h2 className="text-lg font-600 text-foreground">Subscription Ledger</h2>
+                  <p className="text-xs text-muted-foreground mt-0.5">Chronological history of plan changes and renewals</p>
+                </div>
+              </div>
+              <button onClick={() => setShowHistoryModal(false)} className="p-2 rounded-lg text-muted-foreground hover:bg-muted transition-colors">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6">
+              {loadingHistory ? (
+                <div className="text-center py-10 text-muted-foreground text-sm">
+                  <RefreshCw className="animate-spin mx-auto mb-2 opacity-40" />
+                  Loading history...
+                </div>
+              ) : subscriptionHistory.length === 0 ? (
+                <div className="text-center py-12 border-2 border-dashed border-border rounded-xl">
+                  <History size={32} className="mx-auto mb-3 text-muted-foreground/20" />
+                  <p className="text-sm text-muted-foreground">No history records found for this subscription.</p>
+                </div>
+              ) : (
+                <div className="space-y-6 relative before:absolute before:left-5 before:top-2 before:bottom-2 before:w-px before:bg-border">
+                  {subscriptionHistory.map((h, i) => (
+                    <div key={h.id} className="relative pl-12">
+                      <div className={`absolute left-3.5 top-1 w-3.5 h-3.5 rounded-full border-2 border-white ring-2 ring-transparent transition-all ${
+                        h.event_type === 'CREATION' ? 'bg-green-500 ring-green-100' :
+                        h.event_type === 'UPGRADE' ? 'bg-blue-600 ring-blue-100' :
+                        h.event_type === 'DOWNGRADE' ? 'bg-amber-500 ring-amber-100' :
+                        'bg-slate-400 ring-slate-100'
+                      }`} />
+                      
+                      <div className="bg-white border border-border rounded-xl p-4 shadow-sm hover:border-primary/30 transition-colors">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${
+                            h.event_type === 'CREATION' ? 'bg-green-50 text-green-700 border border-green-100' :
+                            h.event_type === 'UPGRADE' ? 'bg-blue-50 text-blue-700 border border-blue-100' :
+                            h.event_type === 'RENEWAL' ? 'bg-slate-50 text-slate-700 border border-slate-100' :
+                            'bg-amber-50 text-amber-700 border border-amber-100'
+                          }`}>
+                            {h.event_type}
+                          </span>
+                          <span className="text-[11px] text-muted-foreground">{fmtDate(h.createdAt)}</span>
+                        </div>
+                        
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2 text-sm">
+                            <Package size={13} className="text-muted-foreground" />
+                            <span className="text-muted-foreground">Plan:</span>
+                            <span className="font-500 text-foreground">
+                              {h.prev_plan_name === h.new_plan_name ? h.new_plan_name : (
+                                <>{h.prev_plan_name || 'N/A'} → <span className="text-primary">{h.new_plan_name}</span></>
+                              )}
+                            </span>
+                          </div>
+                          
+                          <div className="grid grid-cols-2 gap-4 pt-1">
+                            <div>
+                              <p className="text-[11px] text-muted-foreground uppercase font-600">Period</p>
+                              <p className="text-xs text-foreground">{fmtDate(h.start_date)} - {fmtDate(h.end_date)}</p>
+                            </div>
+                            <div>
+                              <p className="text-[11px] text-muted-foreground uppercase font-600">Amount</p>
+                              <p className="text-xs font-600 text-slate-800">{fmtCurrency(h.amount)}</p>
+                            </div>
+                          </div>
+
+                          {h.notes && (
+                            <div className="mt-2 pt-2 border-t border-slate-50 italic text-[11px] text-muted-foreground leading-relaxed">
+                              "{h.notes}"
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-border bg-muted/20 text-center">
+              <button onClick={() => setShowHistoryModal(false)} className="text-xs font-600 text-primary hover:underline">Close Ledger</button>
+            </div>
+          </div>
+        </div>
+      )}
+      <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="lazyOnload" />
     </>
   );
 }

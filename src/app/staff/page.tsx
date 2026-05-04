@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 
-import { createClient } from '@/lib/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
 import { UserCog, Plus, Search, Edit2, CheckCircle, XCircle, Loader2, X, Save } from 'lucide-react';
 
 interface Department {
@@ -14,8 +14,8 @@ interface Department {
 interface Role {
   id: string;
   name: string;
-  department_id: string | null;
-  department_name: string | null;
+  departmentId: string | null;
+  departmentName: string | null;
   status: string;
 }
 
@@ -43,7 +43,6 @@ interface StaffForm {
 const emptyForm: StaffForm = { fullName: '', email: '', phone: '', roleId: '', status: 'active' };
 
 export default function StaffPage() {
-  const supabase = createClient();
 
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -61,42 +60,25 @@ export default function StaffPage() {
     setLoading(true);
     try {
       const [staffRes, rolesRes] = await Promise.all([
-        supabase
-          .from('profiles')
-          .select('id, email, company_id, created_at')
-          .order('email'),
-        supabase
-          .from('staff_roles')
-          .select('id, name, department_id, status, staff_departments(id, name)')
-          .eq('status', 'active')
-          .order('name'),
+        fetch('/api/mysql/staff').then((r) => r.json()),
+        fetch('/api/mysql/roles').then((r) => r.json()),
       ]);
 
-      const mappedStaff: StaffMember[] = (staffRes.data || []).map((s: any) => ({
-        id: s.id,
-        fullName: s.email || '',
-        email: s.email || '',
-        phone: null,
-        roleId: null,
-        roleName: null,
-        departmentId: null,
-        departmentName: null,
-        status: 'active',
-        createdAt: s.created_at,
-      }));
+      if (staffRes?.error) {
+        console.error('API Error (Staff):', staffRes.error);
+        setStaff([]);
+      } else {
+        setStaff(Array.isArray(staffRes) ? staffRes : []);
+      }
 
-      const mappedRoles: Role[] = (rolesRes.data || []).map((r: any) => ({
-        id: r.id,
-        name: r.name,
-        department_id: r.department_id,
-        department_name: r.staff_departments?.name || null,
-        status: r.status,
-      }));
-
-      setStaff(mappedStaff);
-      setRoles(mappedRoles);
+      if (rolesRes?.error) {
+        console.error('API Error (Roles):', rolesRes.error);
+        setRoles([]);
+      } else {
+        setRoles((Array.isArray(rolesRes) ? rolesRes : []).filter((r: any) => r.status === 'active'));
+      }
     } catch (err) {
-      console.error('Error fetching staff:', err);
+      console.error('Error fetching staff data:', err);
     } finally {
       setLoading(false);
     }
@@ -133,16 +115,20 @@ export default function StaffPage() {
     setSaving(true);
     try {
       if (editingId) {
-        // Update existing profile
-        const { error } = await supabase
-          .from('profiles')
-          .update({
-            company_id: form.roleId || null,
-          })
-          .eq('id', editingId);
-        if (error) throw error;
+        // Update existing profile in MySQL
+        const res = await fetch(`/api/mysql/staff/${editingId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fullName: form.fullName.trim(),
+            phone: form.phone.trim() || null,
+            roleId: form.roleId || null,
+            status: form.status,
+          }),
+        });
+        if (!res.ok) throw new Error('Failed to update staff member.');
       } else {
-        // Create staff via API route (creates auth user + profile atomically)
+        // Create staff via API route (creates user + profile in MySQL)
         const res = await fetch('/api/staff/create', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -168,7 +154,15 @@ export default function StaffPage() {
 
   const toggleStatus = async (id: string, currentStatus: string) => {
     const newStatus = currentStatus === 'active' ? 'inactive' : 'active';
-    await supabase.from('profiles').update({ status: newStatus }).eq('id', id);
+    // We can use a PATCH to a profiles detail API or a dedicated status API
+    // Given we don't have one yet, I'll assume we can use a PATCH to api/mysql/staff/[id] if created
+    // But for now let's just update locally and I'll create the route if needed.
+    // Actually, I'll use the profile assignment logic we have in mysql-admin.
+    await fetch(`/api/mysql/staff/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus }),
+    });
     setStaff((prev) => prev.map((s) => s.id === id ? { ...s, status: newStatus } : s));
   };
 
@@ -368,11 +362,11 @@ export default function StaffPage() {
                 >
                   <option value="">— Select Role —</option>
                   {roles.map((r) => (
-                    <option key={r.id} value={r.id}>{r.name}{r.department_name ? ` (${r.department_name})` : ''}</option>
+                    <option key={r.id} value={r.id}>{r.name}{r.departmentName ? ` (${r.departmentName})` : ''}</option>
                   ))}
                 </select>
-                {selectedRole?.department_name && (
-                  <p className="text-xs text-muted-foreground">Department: <strong>{selectedRole.department_name}</strong></p>
+                {selectedRole?.departmentName && (
+                  <p className="text-xs text-muted-foreground">Department: <strong>{selectedRole.departmentName}</strong></p>
                 )}
               </div>
               <div className="space-y-1.5">

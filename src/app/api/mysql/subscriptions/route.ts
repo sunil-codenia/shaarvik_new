@@ -51,6 +51,24 @@ export async function POST(request: NextRequest) {
       notes,
     });
 
+    // --- Log Creation in History ---
+    try {
+      const { createSubscriptionHistory } = await import('@/lib/mysql-crm');
+      await createSubscriptionHistory({
+        subscriptionId: subscription.id,
+        clientId,
+        companyId,
+        newPlanId: saasPlanId,
+        eventType: 'CREATION',
+        amount,
+        startDate,
+        endDate,
+        notes: 'Initial subscription creation',
+      });
+    } catch (historyErr) {
+      console.error('Failed to log subscription creation history:', historyErr);
+    }
+
     return NextResponse.json(subscription);
   } catch (error: any) {
     return NextResponse.json({ error: error.message || 'Failed to create subscription.' }, { status: 500 });

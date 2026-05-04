@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { mysqlPool } from '@/lib/mysql';
 import { getLeadById } from '@/lib/mysql-leads';
+import { createNewInvoice, getFullInvoiceForEmail } from '@/lib/mysql-crm-invoices';
+import { sendInvoiceEmail } from '@/lib/mail-service';
+import { logSystem } from '@/lib/mysql-logger';
+import { ResultSetHeader } from 'mysql2/promise';
 
 export const runtime = 'nodejs';
 
@@ -18,6 +22,8 @@ export async function POST(request: Request) {
     const paymentMode = String(body?.paymentMode || 'online').trim();
     const amount = body?.amount == null || body?.amount === '' ? 0 : Number(body.amount);
     const notes = String(body?.notes || '').trim() || null;
+    const transactionId = body?.transactionId || null;
+    const gateway = body?.gateway || null;
 
     if (!leadId) {
       return NextResponse.json({ error: 'leadId required' }, { status: 400 });
@@ -83,34 +89,102 @@ export async function POST(request: Request) {
       const [subResult] = await connection.query<any>(
         `
           INSERT INTO subscriptions (
-            client_id,
-            company_id,
-            saas_plan_id,
-            billing_cycle,
-            payment_mode,
-            amount,
-            amount_paid,
-            start_date,
-            end_date,
-            status,
-            notes
+            client_id, company_id, saas_plan_id, billing_cycle, start_date, end_date,
+            status, payment_mode, amount, amount_paid, notes, transaction_id, gateway
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           clientId,
           companyId,
           saasPlanId,
           billingCycle || 'monthly',
+          today,
+          endDate,
+          'active',
           paymentMode || 'online',
           amount || 0,
           amount || 0,
-          today,
-          endDate,
           notes,
+          transactionId,
+          gateway || 'manual',
         ]
       );
       subscriptionId = String(subResult.insertId);
+
+      // --- NEW: Generate Invoice Automatically and Send Email ---
+      (async () => {
+        try {
+          await logSystem('info', `Lead convert invoicing started`, { clientId, companyId });
+
+          // Ensure we have a valid companyId for the invoice
+          // Fallback to Company 1 (the primary Admin company) if everything else fails
+          const finalCompanyId = lead.company_id || companyId || 1;
+          
+          if (!lead.company_id && !companyId) {
+            await logSystem('warn', 'Conversion triggered with fallback companyId (1)', { leadId });
+          }
+
+          const { id: invoiceId, invoiceNumber } = await createNewInvoice({
+            clientId,
+            subscriptionId,
+            companyId: finalCompanyId, // Strict enforcement
+            amount: amount || 0,
+            finalAmount: amount || 0,
+            paidAmount: amount || 0,
+            status: 'paid',
+            gateway,
+            transactionId,
+            notes: 'Created via Lead Conversion'
+          });
+
+          await logSystem('info', `Invoice ${invoiceNumber} created via conversion`, { invoiceId });
+
+          const fullInvoice = await getFullInvoiceForEmail(invoiceId);
+          if (fullInvoice) {
+            // Attach credentials from lead for the onboarding email
+            await sendInvoiceEmail({
+              ...fullInvoice,
+              username: lead.username,
+              password: lead.password
+            });
+            await logSystem('info', `Invoice ${invoiceNumber} emailed safely with credentials`, { to: fullInvoice.client_email });
+          } else {
+            await logSystem('error', `Failed to fetch details for converted invoice ${invoiceId}`);
+          }
+        } catch (err: any) {
+          console.error(`[Lead Convert] Invoicing/Email failed: ${err.message}`);
+          await logSystem('error', `Conversion Invoicing/Email failed: ${err.message}`, { clientId });
+        }
+      })();
+    }
+
+    // --- NEW: Log Creation in History ---
+    if (subscriptionId) {
+      try {
+        const [historyResult] = await connection.query(
+          `
+            INSERT INTO subscription_history (
+              subscription_id, client_id, company_id, new_plan_id,
+              event_type, amount, start_date, end_date, notes, transaction_id, gateway
+            )
+            VALUES (?, ?, ?, ?, 'CREATION', ?, ?, ?, 'Subscription created via lead conversion', ?, ?)
+          `,
+          [
+            subscriptionId,
+            clientId,
+            companyId,
+            saasPlanId,
+            amount || 0,
+            today,
+            endDate,
+            transactionId,
+            gateway,
+          ]
+        );
+      } catch (historyErr) {
+        console.error('Failed to log lead conversion subscription history:', historyErr);
+      }
     }
 
     await connection.query(
@@ -128,79 +202,22 @@ export async function POST(request: Request) {
     await connection.commit();
 
     // 2. Trigger External Company Registration in background
+    const { triggerExternalCompanyRegistration } = await import('@/lib/external-registration');
     (async () => {
       try {
-        const registrationUrl = process.env.COMPANY_REGISTRATION_URL || 'http://127.0.0.1:8000';
-        
-        // Fetch Plan Name and Platform Name (Subscription Planner)
-        let planName = 'Standard Plan';
-        let platformName = clientDisplayName; // Fallback
-        let externalModuleIds: number[] = [];
-
-        if (saasPlanId) {
-          const [planRows] = await mysqlPool.query<any[]>(
-            `
-              SELECT sp.name as plan_name, spl.name as platform_name
-              FROM saas_plans sp
-              JOIN saas_platforms spl ON sp.platform_id = spl.id
-              WHERE sp.id = ?
-            `,
-            [saasPlanId]
-          );
-          if (planRows[0]) {
-            planName = planRows[0].plan_name;
-            platformName = planRows[0].platform_name;
-          }
-
-          // Fetch External Module IDs
-          const [moduleRows] = await mysqlPool.query<any[]>(
-            `
-              SELECT sm.external_id 
-              FROM saas_modules sm
-              JOIN saas_plan_modules spm ON spm.module_id = sm.id
-              WHERE spm.plan_id = ?
-            `,
-            [saasPlanId]
-          );
-          externalModuleIds = moduleRows
-            .map(m => m.external_id)
-            .filter(id => id != null) as number[];
-        }
-
-        const payload = {
-          company: {
-            name: platformName, // Using Subscription Planner / Platform Name
-            status: 'Active',
-            db_conn_name: 'mysql'
-          },
-          plan_name: planName,
-          modules: externalModuleIds,
+        await triggerExternalCompanyRegistration({
+          companyName: lead.company_name || clientDisplayName,
+          planId: saasPlanId,
+          amount: amount || 0,
+          endDate: endDate,
           user: {
             name: lead.full_name || 'Client User',
             username: lead.username || lead.email,
-            pass: lead.password || 'admin123',
-            role_id: 1,
-            site_id: 45,
-            status: 'Active',
-            mobile_only: 'no'
+            pass: lead.password || 'admin123'
           }
-        };
-
-        console.log(`[Background] Registering company on conversion (Platform: ${platformName}): ${clientDisplayName}`);
-        
-        const extRes = await fetch(`${registrationUrl}/api/register_company`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
         });
-
-        if (!extRes.ok) {
-          console.error(`[Background] Conversion Registration API failed: ${extRes.status} ${extRes.statusText}`);
-        } else {
-          console.log(`[Background] Conversion Registration API successful for ${clientDisplayName}`);
-        }
       } catch (err: any) {
-        console.error(`[Background] Error during conversion registration: ${err.message}`);
+        console.error(`[Background] Error during conversion registration trigger: ${err.message}`);
       }
     })();
 

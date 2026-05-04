@@ -1,16 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-import { createRole, listRoles } from '@/lib/mysql-admin';
+import { listDepartments, createDepartment } from '@/lib/mysql-admin';
 
 export const runtime = 'nodejs';
 
 export async function GET() {
   try {
-    const roles = await listRoles();
-    return NextResponse.json(roles);
+    const departments = await listDepartments();
+    return NextResponse.json(departments);
   } catch (error: any) {
     return NextResponse.json(
-      { error: error?.message || 'Failed to load roles.' },
+      { error: error?.message || 'Failed to load departments.' },
       { status: 500 }
     );
   }
@@ -21,17 +20,16 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const name = String(body?.name || '').trim();
     const description = String(body?.description || '').trim() || null;
-    const departmentId = body?.departmentId ? String(body.departmentId) : null;
 
     if (!name) {
-      return NextResponse.json({ error: 'Role name is required.' }, { status: 400 });
+      return NextResponse.json({ error: 'Department name is required.' }, { status: 400 });
     }
 
-    const role = await createRole({ name, description, departmentId });
-    return NextResponse.json(role);
+    const department = await createDepartment({ name, description });
+    return NextResponse.json(department);
   } catch (error: any) {
     return NextResponse.json(
-      { error: error?.message || 'Failed to create role.' },
+      { error: error?.message || 'Failed to create department.' },
       { status: 500 }
     );
   }

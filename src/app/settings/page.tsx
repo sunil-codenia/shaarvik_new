@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import { Settings, Building2, Plus, Edit2, CheckCircle, XCircle, Loader2, X, Save, Check, Trash2, Bot, Key, Eye, EyeOff, Copy, Bell } from 'lucide-react';
@@ -56,7 +55,6 @@ const PERM_KEYS: { key: PermKey; label: string }[] = [
 export default function SettingsPage() {
   const { user } = useAuth();
   const router = useRouter();
-  const supabase = createClient();
   const [activeTab, setActiveTab] = useState<'general' | 'departments' | 'roles' | 'api-keys'>('general');
   const [isAdminUser, setIsAdminUser] = useState(false);
   const [checkingAdmin, setCheckingAdmin] = useState(true);
@@ -161,7 +159,6 @@ function GeneralTab() {
 // ─── Departments Tab ──────────────────────────────────────────────────────────
 
 function DepartmentsTab({ isAdmin }: { isAdmin: boolean }) {
-  const supabase = createClient();
   const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -172,11 +169,15 @@ function DepartmentsTab({ isAdmin }: { isAdmin: boolean }) {
 
   const fetchDepts = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase.from('staff_departments').select('*').order('name');
-    setDepartments((data || []).map((d: any) => ({
-      id: d.id, name: d.name, description: d.description, status: d.status, createdAt: d.created_at,
-    })));
-    setLoading(false);
+    try {
+      const res = await fetch('/api/mysql/departments');
+      const data = await res.json();
+      setDepartments(data || []);
+    } catch (err) {
+      console.error('Error fetching departments:', err);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { fetchDepts(); }, [fetchDepts]);
@@ -201,11 +202,19 @@ function DepartmentsTab({ isAdmin }: { isAdmin: boolean }) {
     setSaving(true);
     try {
       if (editingId) {
-        const { error } = await supabase.from('staff_departments').update({ name: form.name.trim(), description: form.description.trim() || null, status: form.status }).eq('id', editingId);
-        if (error) throw error;
+        const res = await fetch(`/api/mysql/departments/${editingId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: form.name.trim(), description: form.description.trim() || null, status: form.status }),
+        });
+        if (!res.ok) throw new Error('Failed to update');
       } else {
-        const { error } = await supabase.from('staff_departments').insert({ name: form.name.trim(), description: form.description.trim() || null, status: form.status });
-        if (error) throw error;
+        const res = await fetch('/api/mysql/departments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: form.name.trim(), description: form.description.trim() || null }),
+        });
+        if (!res.ok) throw new Error('Failed to create');
       }
       setShowModal(false);
       fetchDepts();
@@ -218,7 +227,11 @@ function DepartmentsTab({ isAdmin }: { isAdmin: boolean }) {
 
   const toggleStatus = async (id: string, current: string) => {
     const newStatus = current === 'active' ? 'inactive' : 'active';
-    await supabase.from('staff_departments').update({ status: newStatus }).eq('id', id);
+    await fetch(`/api/mysql/departments/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus }),
+    });
     setDepartments((prev) => prev.map((d) => d.id === id ? { ...d, status: newStatus } : d));
   };
 
@@ -403,7 +416,6 @@ const ALL_SERVICES: ApiService[] = [
 const CATEGORIES = ['All', ...Array.from(new Set(ALL_SERVICES.map(s => s.category)))];
 
 function ApiKeysTab() {
-  const supabase = createClient();
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [visible, setVisible] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState<Record<string, boolean>>({});
@@ -415,19 +427,20 @@ function ApiKeysTab() {
   const [customForm, setCustomForm] = useState({ label: '', category: '', value: '' });
   const [loadingKeys, setLoadingKeys] = useState(true);
 
-  // Load saved keys from Supabase
+  // Load saved keys from MySQL
   useEffect(() => {
     const loadKeys = async () => {
       setLoadingKeys(true);
       try {
-        const { data } = await supabase.from('api_keys').select('key_id, value');
+        const res = await fetch('/api/mysql/api-keys');
+        const data = await res.json();
         if (data) {
           const loaded: Record<string, string> = {};
           data.forEach((row: any) => { loaded[row.key_id] = row.value || ''; });
           setKeys(loaded);
         }
-      } catch {
-        // table may not exist yet — silent
+      } catch (err) {
+        console.error('Error loading API keys:', err);
       } finally {
         setLoadingKeys(false);
       }
@@ -440,11 +453,16 @@ function ApiKeysTab() {
     if (!value.trim()) return;
     setSaving(prev => ({ ...prev, [serviceId]: true }));
     try {
-      await supabase.from('api_keys').upsert({ key_id: serviceId, value: value.trim() }, { onConflict: 'key_id' });
+      const res = await fetch('/api/mysql/api-keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key_id: serviceId, value: value.trim() }),
+      });
+      if (!res.ok) throw new Error('Failed to save');
       setSaved(prev => ({ ...prev, [serviceId]: true }));
       setTimeout(() => setSaved(prev => ({ ...prev, [serviceId]: false })), 2000);
-    } catch {
-      // silent
+    } catch (err) {
+      console.error('Error saving API key:', err);
     } finally {
       setSaving(prev => ({ ...prev, [serviceId]: false }));
     }
@@ -692,7 +710,6 @@ function ApiKeysTab() {
 // ─── Roles Tab ────────────────────────────────────────────────────────────────
 
 function RolesTab({ isAdmin, userId }: { isAdmin: boolean; userId?: string }) {
-  const supabase = createClient();
   const [modules, setModules] = useState<Module[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -714,32 +731,31 @@ function RolesTab({ isAdmin, userId }: { isAdmin: boolean; userId?: string }) {
     setLoading(true);
     try {
       const [modsRes, rolesRes, permsRes, deptsRes] = await Promise.all([
-        supabase.from('modules').select('*').order('sort_order'),
-        supabase.from('staff_roles').select('*, staff_departments(id, name)').order('name'),
-        supabase.from('role_permissions').select('*'),
-        supabase.from('staff_departments').select('*').eq('status', 'active').order('name'),
+        fetch('/api/mysql/modules').then(r => r.json()),
+        fetch('/api/mysql/roles').then(r => r.json()),
+        fetch('/api/mysql/role-permissions').then(r => r.json()),
+        fetch('/api/mysql/departments').then(r => r.json()),
       ]);
 
-      setModules(modsRes.data || []);
-      setRoles((rolesRes.data || []).map((r: any) => ({
-        id: r.id, name: r.name, description: r.description, departmentId: r.department_id,
-        departmentName: r.staff_departments?.name || null, isSystem: r.is_system || false, status: r.status || 'active',
-      })));
-      setDepartments((deptsRes.data || []).map((d: any) => ({ id: d.id, name: d.name, description: d.description, status: d.status, createdAt: d.created_at })));
+      setModules(modsRes || []);
+      setRoles(rolesRes || []);
+      setDepartments((deptsRes || []).filter((d: any) => d.status === 'active'));
 
       const permMap: Record<string, Permission> = {};
-      (permsRes.data || []).forEach((p: Permission) => { permMap[permKey(p.role_id, p.module_id)] = p; });
+      (permsRes || []).forEach((p: Permission) => {
+        permMap[permKey(p.role_id, p.module_id)] = p;
+      });
       setPermissions(permMap);
 
-      if (rolesRes.data && rolesRes.data.length > 0 && !selectedRole) {
-        setSelectedRole(rolesRes.data[0].id);
+      if (rolesRes && rolesRes.length > 0 && !selectedRole) {
+        setSelectedRole(rolesRes[0].id);
       }
     } catch (err) {
       console.error('Error fetching roles data:', err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedRole]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -771,8 +787,12 @@ function RolesTab({ isAdmin, userId }: { isAdmin: boolean; userId?: string }) {
         const p = permissions[k] || { role_id: selectedRole, module_id: mod.id, can_view: false, can_create: false, can_edit: false, can_delete: false };
         return { role_id: selectedRole, module_id: mod.id, can_view: p.can_view, can_create: p.can_create, can_edit: p.can_edit, can_delete: p.can_delete };
       });
-      const { error } = await supabase.from('role_permissions').upsert(rolePerms, { onConflict: 'role_id,module_id' });
-      if (error) throw error;
+      const res = await fetch('/api/mysql/role-permissions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ permissions: rolePerms }),
+      });
+      if (!res.ok) throw new Error('Failed to save permissions');
       setSaveMsg('Permissions saved successfully');
       setTimeout(() => setSaveMsg(''), 3000);
     } catch (err: any) {
@@ -802,11 +822,20 @@ function RolesTab({ isAdmin, userId }: { isAdmin: boolean; userId?: string }) {
     setAddingRole(true);
     try {
       if (editingRoleId) {
-        const { error } = await supabase.from('staff_roles').update({ name: roleForm.name.trim(), description: roleForm.description.trim() || null, department_id: roleForm.departmentId || null, status: roleForm.status }).eq('id', editingRoleId);
-        if (error) throw error;
+        const res = await fetch(`/api/mysql/roles/${editingRoleId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: roleForm.name.trim(), description: roleForm.description.trim() || null, departmentId: roleForm.departmentId || null, status: roleForm.status }),
+        });
+        if (!res.ok) throw new Error('Failed to update');
       } else {
-        const { data, error } = await supabase.from('staff_roles').insert({ name: roleForm.name.trim(), description: roleForm.description.trim() || null, department_id: roleForm.departmentId || null, status: roleForm.status, is_system: false }).select().single();
-        if (error) throw error;
+        const res = await fetch('/api/mysql/roles', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: roleForm.name.trim(), description: roleForm.description.trim() || null, departmentId: roleForm.departmentId || null }),
+        });
+        if (!res.ok) throw new Error('Failed to create');
+        const data = await res.json();
         setSelectedRole(data.id);
       }
       setShowRoleModal(false);
@@ -822,14 +851,18 @@ function RolesTab({ isAdmin, userId }: { isAdmin: boolean; userId?: string }) {
     const role = roles.find((r) => r.id === roleId);
     if (role?.isSystem) { alert('System roles cannot be deleted.'); return; }
     if (!confirm('Delete this role? This will remove all associated permissions.')) return;
-    await supabase.from('staff_roles').delete().eq('id', roleId);
+    await fetch(`/api/mysql/roles/${roleId}`, { method: 'DELETE' });
     setRoles((prev) => prev.filter((r) => r.id !== roleId));
     if (selectedRole === roleId) setSelectedRole(roles[0]?.id || null);
   };
 
   const toggleRoleStatus = async (id: string, current: string) => {
     const newStatus = current === 'active' ? 'inactive' : 'active';
-    await supabase.from('staff_roles').update({ status: newStatus }).eq('id', id);
+    await fetch(`/api/mysql/roles/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus }),
+    });
     setRoles((prev) => prev.map((r) => r.id === id ? { ...r, status: newStatus } : r));
   };
 

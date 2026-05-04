@@ -36,7 +36,7 @@ export default function WebsiteHomePage() {
             </p>
             <div className="flex flex-col sm:flex-row gap-3">
               <Link
-                href="/website/buildarya"
+                href="https://buildarya.com/"
                 className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl transition-all duration-200 shadow-lg shadow-blue-900/40"
               >
                 Explore Buildarya
@@ -102,7 +102,7 @@ export default function WebsiteHomePage() {
                 ))}
               </div>
               <Link
-                href="/website/buildarya"
+                href="https://buildarya.com/"
                 className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition-all duration-200 shadow-sm"
               >
                 View Buildarya

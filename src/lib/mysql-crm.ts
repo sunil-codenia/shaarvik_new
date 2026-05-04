@@ -209,15 +209,17 @@ export async function createSubscription(input: {
   amount: number;
   amountPaid: number;
   notes: string | null;
+  transactionId?: string | null;
+  gateway?: string | null;
 }) {
   await ensureSubscriptionSchema();
   const [result] = await mysqlPool.query<any>(
     `
       INSERT INTO subscriptions (
         client_id, company_id, saas_plan_id, billing_cycle, start_date, end_date,
-        status, payment_mode, amount, amount_paid, notes
+        status, payment_mode, amount, amount_paid, notes, transaction_id, gateway
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     [
       Number(input.clientId),
@@ -231,6 +233,8 @@ export async function createSubscription(input: {
       input.amount,
       input.amountPaid,
       input.notes,
+      input.transactionId || null,
+      input.gateway || 'manual',
     ]
   );
 
@@ -246,9 +250,10 @@ export async function updateSubscription(
     endDate: string | null;
     status: string;
     paymentMode: string;
-    amount: number;
     amountPaid: number;
     notes: string | null;
+    transactionId?: string | null;
+    gateway?: string | null;
   }>
 ) {
   await ensureSubscriptionSchema();
@@ -264,7 +269,9 @@ export async function updateSubscription(
         payment_mode = COALESCE(?, payment_mode),
         amount = COALESCE(?, amount),
         amount_paid = COALESCE(?, amount_paid),
-        notes = COALESCE(?, notes)
+        notes = COALESCE(?, notes),
+        transaction_id = COALESCE(?, transaction_id),
+        gateway = COALESCE(?, gateway)
       WHERE id = ?
     `,
     [
@@ -277,6 +284,8 @@ export async function updateSubscription(
       input.amount ?? null,
       input.amountPaid ?? null,
       input.notes ?? null,
+      input.transactionId ?? null,
+      input.gateway ?? null,
       id,
     ]
   );
@@ -285,6 +294,68 @@ export async function updateSubscription(
 export async function deleteSubscription(id: string) {
   await ensureSubscriptionSchema();
   await mysqlPool.query('DELETE FROM subscriptions WHERE id = ?', [id]);
+}
+
+// --- Subscription History / Ledger ---
+
+export async function listSubscriptionHistory(subscriptionId: string) {
+  const [rows] = await mysqlPool.query<RowDataPacket[]>(
+    `SELECT h.*, p_prev.name as prev_plan_name, p_new.name as new_plan_name
+     FROM subscription_history h
+     LEFT JOIN saas_plans p_prev ON p_prev.id = h.previous_plan_id
+     LEFT JOIN saas_plans p_new ON p_new.id = h.new_plan_id
+     WHERE h.subscription_id = ?
+     ORDER BY h.createdAt DESC`,
+    [subscriptionId]
+  );
+  return rows.map(row => ({
+    ...row,
+    id: String(row.id),
+    subscription_id: String(row.subscription_id),
+    client_id: String(row.client_id),
+    previous_plan_id: row.previous_plan_id ? String(row.previous_plan_id) : null,
+    new_plan_id: row.new_plan_id ? String(row.new_plan_id) : null,
+  }));
+}
+
+export async function createSubscriptionHistory(input: {
+  subscriptionId: string | number;
+  clientId: string | number;
+  companyId?: string | number | null;
+  previousPlanId?: string | number | null;
+  newPlanId?: string | number | null;
+  eventType: 'CREATION' | 'RENEWAL' | 'UPGRADE' | 'DOWNGRADE' | 'CANCELLATION';
+  amount?: number | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  notes?: string | null;
+  transactionId?: string | null;
+  gateway?: string | null;
+}) {
+  const [result] = await mysqlPool.query<any>(
+    `
+      INSERT INTO subscription_history (
+        subscription_id, client_id, company_id, previous_plan_id, new_plan_id,
+        event_type, amount, start_date, end_date, notes, transaction_id, gateway
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    [
+      Number(input.subscriptionId),
+      Number(input.clientId),
+      input.companyId == null ? null : Number(input.companyId),
+      input.previousPlanId == null ? null : Number(input.previousPlanId),
+      input.newPlanId == null ? null : Number(input.newPlanId),
+      input.eventType,
+      input.amount || null,
+      input.startDate || null,
+      input.endDate || null,
+      input.notes || null,
+      input.transactionId || null,
+      input.gateway || null,
+    ]
+  );
+  return { id: String(result.insertId) };
 }
 
 let subscriptionSchemaReady: Promise<void> | null = null;
@@ -333,10 +404,24 @@ async function ensureSubscriptionSchema() {
 // --- Invoices ---
 export async function listInvoicesByCompanyId(companyId: string) {
   const [rows] = await mysqlPool.query<RowDataPacket[]>(
-    `SELECT i.*, s.plan as subscription_plan, c.name as company_name, c.email as company_email
+    `SELECT 
+      i.*, 
+      sp.name as plan_name,
+      plt.name as platform_name,
+      s.billing_cycle,
+      c.name as provider_name, 
+      c.email as provider_email,
+      cl.name as client_name,
+      cl.email as client_email,
+      cl.phone as client_phone,
+      cl.address as client_address,
+      cl.gst_number as client_gst
      FROM invoices i
      LEFT JOIN subscriptions s ON s.id = i.subscription_id
+     LEFT JOIN saas_plans sp ON sp.id = s.saas_plan_id
+     LEFT JOIN saas_platforms plt ON plt.id = sp.platform_id
      LEFT JOIN companies c ON c.id = i.company_id
+     LEFT JOIN clients cl ON cl.id = i.client_id
      WHERE i.company_id = ?
      ORDER BY i.createdAt DESC`,
     [companyId]
@@ -347,13 +432,22 @@ export async function listInvoicesByCompanyId(companyId: string) {
     company_id: String(row.company_id),
     subscription_id: row.subscription_id ? String(row.subscription_id) : null,
     product_id: row.product_id ? String(row.product_id) : null,
-    company_subscriptions: {
-      id: String(row.subscription_id),
-      companies: {
-        name: row.company_name,
-        email: row.company_email,
-      }
-    }
+    gateway: row.gateway, // Include payment mode/gateway
+    // Add explicitly mapped names for the frontend
+    provider: {
+      name: row.provider_name,
+      email: row.provider_email,
+    },
+    client: {
+      name: row.client_name,
+      email: row.client_email,
+      phone: row.client_phone,
+      address: row.client_address,
+      gst: row.client_gst,
+    },
+    subscription_plan: row.plan_name 
+      ? `${row.plan_name}${row.platform_name ? ` - ${row.platform_name}` : ''} (${row.billing_cycle || 'monthly'})` 
+      : (row.subscription_id ? 'SaaS Subscription' : 'SaaS Product')
   }));
 }
 

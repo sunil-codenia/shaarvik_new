@@ -186,7 +186,7 @@ export default function Sidebar() {
           {!collapsed && (
             <div className="min-w-0">
               <p className="text-white font-semibold text-[13.5px] leading-tight truncate">Shaarvik</p>
-              <p className="text-[10px] leading-tight truncate" style={{ color: 'rgba(148,163,184,0.7)' }}>Control Panel</p>
+              <p className="text-[10px] leading-tight truncate" style={{ color: 'rgba(255,255,255,0.55)' }}>Control Panel</p>
             </div>
           )}
         </div>
@@ -194,7 +194,7 @@ export default function Sidebar() {
         {/* Nav */}
         <nav className="flex-1 py-3 overflow-y-auto scrollbar-thin">
           {!collapsed && (
-            <p className="px-4 mb-1.5 text-[10px] font-semibold uppercase tracking-widest" style={{ color: 'rgba(71,85,105,1)' }}>
+            <p className="px-4 mb-2 text-[11px] font-bold uppercase tracking-[0.1em]" style={{ color: 'rgba(255,255,255,0.45)' }}>
               Main
             </p>
           )}
@@ -216,25 +216,25 @@ export default function Sidebar() {
                         }`}
                         style={
                           isMarketingActive
-                            ? { background: 'rgba(59,130,246,0.15)', color: '#93c5fd', boxShadow: 'inset 3px 0 0 #3b82f6' }
-                            : { color: 'rgba(148,163,184,0.8)' }
+                            ? { background: 'rgba(59,130,246,0.15)', color: '#ffffff', boxShadow: 'inset 3px 0 0 #3b82f6' }
+                            : { color: '#ffffff' }
                         }
                         onMouseEnter={(e) => {
                           if (!isMarketingActive) {
                             (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.06)';
-                            (e.currentTarget as HTMLElement).style.color = '#e2e8f0';
+                            (e.currentTarget as HTMLElement).style.color = '#ffffff';
                           }
                         }}
                         onMouseLeave={(e) => {
                           if (!isMarketingActive) {
                             (e.currentTarget as HTMLElement).style.background = '';
-                            (e.currentTarget as HTMLElement).style.color = 'rgba(148,163,184,0.8)';
+                            (e.currentTarget as HTMLElement).style.color = '#ffffff';
                           }
                         }}
                         title={collapsed ? item.label : undefined}
                       >
                         <ItemIcon size={17} className="flex-shrink-0" />
-                        {!collapsed && <span className="flex-1 truncate">{item.label}</span>}
+                        {!collapsed && <span className="flex-1 truncate" style={{ color: 'white' }}>{item.label}</span>}
                         {collapsed && (
                           <span
                             className="pointer-events-none absolute left-full ml-2.5 z-50 whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-medium text-white opacity-0 group-hover:opacity-100 transition-opacity duration-150"
@@ -248,9 +248,9 @@ export default function Sidebar() {
                         <button
                           onClick={() => setMarketingOpen(!marketingOpen)}
                           className="flex items-center justify-center w-7 h-7 rounded-lg transition-all duration-150 flex-shrink-0"
-                          style={{ color: 'rgba(148,163,184,0.5)' }}
-                          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.06)'; (e.currentTarget as HTMLElement).style.color = '#e2e8f0'; }}
-                          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = ''; (e.currentTarget as HTMLElement).style.color = 'rgba(148,163,184,0.5)'; }}
+                          style={{ color: 'rgba(255,255,255,0.4)' }}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.06)'; (e.currentTarget as HTMLElement).style.color = '#fff'; }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = ''; (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.4)'; }}
                           title="Toggle Marketing submenu"
                         >
                           <ChevronDown
@@ -274,24 +274,24 @@ export default function Sidebar() {
                                 className="group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[12px] font-medium transition-all duration-150"
                                 style={
                                   isSubActive
-                                    ? { background: 'rgba(59,130,246,0.12)', color: '#93c5fd' }
-                                    : { color: 'rgba(148,163,184,0.65)' }
+                                    ? { background: 'rgba(59,130,246,0.12)', color: '#ffffff' }
+                                    : { color: '#ffffff' }
                                 }
                                 onMouseEnter={(e) => {
                                   if (!isSubActive) {
                                     (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.05)';
-                                    (e.currentTarget as HTMLElement).style.color = '#cbd5e1';
+                                    (e.currentTarget as HTMLElement).style.color = '#ffffff';
                                   }
                                 }}
                                 onMouseLeave={(e) => {
                                   if (!isSubActive) {
                                     (e.currentTarget as HTMLElement).style.background = '';
-                                    (e.currentTarget as HTMLElement).style.color = 'rgba(148,163,184,0.65)';
+                                    (e.currentTarget as HTMLElement).style.color = '#ffffff';
                                   }
                                 }}
                               >
                                 <SubIcon size={14} className="flex-shrink-0" />
-                                <span className="truncate">{sub.label}</span>
+                                <span className="truncate" style={{ color: 'white' }}>{sub.label}</span>
                               </Link>
                             </li>
                           );
@@ -311,25 +311,25 @@ export default function Sidebar() {
                     }`}
                     style={
                       isActive
-                        ? { background: 'rgba(59,130,246,0.15)', color: '#93c5fd', boxShadow: 'inset 3px 0 0 #3b82f6' }
-                        : { color: 'rgba(148,163,184,0.8)' }
+                        ? { background: 'rgba(59,130,246,0.15)', color: '#ffffff', boxShadow: 'inset 3px 0 0 #3b82f6' }
+                        : { color: '#ffffff' }
                     }
                     onMouseEnter={(e) => {
                       if (!isActive) {
                         (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.06)';
-                        (e.currentTarget as HTMLElement).style.color = '#e2e8f0';
+                        (e.currentTarget as HTMLElement).style.color = '#ffffff';
                       }
                     }}
                     onMouseLeave={(e) => {
                       if (!isActive) {
                         (e.currentTarget as HTMLElement).style.background = '';
-                        (e.currentTarget as HTMLElement).style.color = 'rgba(148,163,184,0.8)';
+                        (e.currentTarget as HTMLElement).style.color = '#ffffff';
                       }
                     }}
                     title={collapsed ? item.label : undefined}
                   >
                     <ItemIcon size={17} className="flex-shrink-0" />
-                    {!collapsed && <span className="flex-1 truncate">{item.label}</span>}
+                    {!collapsed && <span className="flex-1 truncate" style={{ color: 'white' }}>{item.label}</span>}
                     {collapsed && (
                       <span
                         className="pointer-events-none absolute left-full ml-2.5 z-50 whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-medium text-white opacity-0 group-hover:opacity-100 transition-opacity duration-150"
@@ -347,7 +347,7 @@ export default function Sidebar() {
           {/* System Group */}
           <div className="mt-3 pt-3 mx-2" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
             {!collapsed && (
-              <p className="px-2 mb-1.5 text-[10px] font-semibold uppercase tracking-widest" style={{ color: 'rgba(71,85,105,1)' }}>
+              <p className="px-2 mb-2 text-[11px] font-bold uppercase tracking-[0.1em]" style={{ color: 'rgba(255,255,255,0.45)' }}>
                 System
               </p>
             )}
@@ -364,25 +364,25 @@ export default function Sidebar() {
                       }`}
                       style={
                         isActive
-                          ? { background: 'rgba(59,130,246,0.15)', color: '#93c5fd', boxShadow: 'inset 3px 0 0 #3b82f6' }
-                          : { color: 'rgba(148,163,184,0.8)' }
+                          ? { background: 'rgba(59,130,246,0.15)', color: '#ffffff', boxShadow: 'inset 3px 0 0 #3b82f6' }
+                          : { color: '#ffffff' }
                       }
                       onMouseEnter={(e) => {
                         if (!isActive) {
                           (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.06)';
-                          (e.currentTarget as HTMLElement).style.color = '#e2e8f0';
+                          (e.currentTarget as HTMLElement).style.color = '#ffffff';
                         }
                       }}
                       onMouseLeave={(e) => {
                         if (!isActive) {
                           (e.currentTarget as HTMLElement).style.background = '';
-                          (e.currentTarget as HTMLElement).style.color = 'rgba(148,163,184,0.8)';
+                          (e.currentTarget as HTMLElement).style.color = '#ffffff';
                         }
                       }}
                       title={collapsed ? item.label : undefined}
                     >
                       <ItemIcon size={17} className="flex-shrink-0" />
-                      {!collapsed && <span className="flex-1 truncate">{item.label}</span>}
+                      {!collapsed && <span className="flex-1 truncate" style={{ color: 'white' }}>{item.label}</span>}
                       {collapsed && (
                         <span
                           className="pointer-events-none absolute left-full ml-2.5 z-50 whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-medium text-white opacity-0 group-hover:opacity-100 transition-opacity duration-150"
@@ -426,7 +426,7 @@ export default function Sidebar() {
               title={collapsed ? 'Back to Website' : undefined}
             >
               <Globe size={17} className="flex-shrink-0" />
-              {!collapsed && <span className="flex-1 truncate">Back to Website</span>}
+              {!collapsed && <span className="flex-1 truncate" style={{ color: 'white' }}>Back to Website</span>}
               {collapsed && (
                 <span
                   className="pointer-events-none absolute left-full ml-2.5 z-50 whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-medium text-white opacity-0 group-hover:opacity-100 transition-opacity duration-150"
@@ -466,7 +466,7 @@ export default function Sidebar() {
             >
               <Network size={17} className="flex-shrink-0" />
               {!collapsed && (
-                <span className="flex-1 truncate flex items-center gap-1.5">
+                <span className="flex-1 truncate flex items-center gap-1.5" style={{ color: 'white' }}>
                   Sys. Architecture
                   <span
                     className="text-[9px] font-bold px-1.5 py-0.5 rounded"
@@ -501,12 +501,12 @@ export default function Sidebar() {
               }}
               onMouseLeave={(e) => {
                 (e.currentTarget as HTMLElement).style.background = '';
-                (e.currentTarget as HTMLElement).style.color = 'rgba(248,113,113,0.85)';
+                (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.75)';
               }}
               title={collapsed ? 'Logout' : undefined}
             >
               <LogOut size={17} className="flex-shrink-0" />
-              {!collapsed && <span className="flex-1 text-left truncate">Logout</span>}
+              {!collapsed && <span className="flex-1 text-left truncate" style={{ color: 'white' }}>Logout</span>}
               {collapsed && (
                 <span
                   className="pointer-events-none absolute left-full ml-2.5 z-50 whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-medium text-white opacity-0 group-hover:opacity-100 transition-opacity duration-150"
@@ -524,7 +524,7 @@ export default function Sidebar() {
           {!collapsed ? (
             <div
               className="w-full flex items-center gap-3 px-2 py-2 rounded-lg"
-              style={{ color: 'rgba(148,163,184,0.85)' }}
+              style={{ color: 'rgba(255,255,255,0.85)' }}
             >
               <div
                 className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-semibold text-white"
@@ -533,8 +533,8 @@ export default function Sidebar() {
                 {initials}
               </div>
               <div className="flex-1 min-w-0 text-left">
-                <p className="text-[13px] font-medium text-slate-200 truncate">{displayName}</p>
-                <p className="text-[11px] capitalize" style={{ color: 'rgba(100,116,139,1)' }}>{role}</p>
+                <p className="text-[13px] font-medium text-white truncate">{displayName}</p>
+                <p className="text-[11px] capitalize" style={{ color: 'rgba(255,255,255,0.5)' }}>{role}</p>
               </div>
             </div>
           ) : (

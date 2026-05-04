@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { updateRole, deleteRole } from '@/lib/mysql-admin';
+import { updateDepartment, deleteDepartment } from '@/lib/mysql-admin';
 
 export const runtime = 'nodejs';
 
@@ -11,12 +11,12 @@ export async function PATCH(
     const id = (await params).id;
     const body = await request.json();
     
-    await updateRole(id, body);
+    await updateDepartment(id, body);
     
     return NextResponse.json({ success: true });
   } catch (error: any) {
     return NextResponse.json(
-      { error: error?.message || 'Failed to update role.' },
+      { error: error?.message || 'Failed to update department.' },
       { status: 500 }
     );
   }
@@ -28,11 +28,11 @@ export async function DELETE(
 ) {
   try {
     const id = (await params).id;
-    await deleteRole(id);
+    await deleteDepartment(id);
     return NextResponse.json({ success: true });
   } catch (error: any) {
     return NextResponse.json(
-      { error: error?.message || 'Failed to delete role.' },
+      { error: error?.message || 'Failed to delete department.' },
       { status: 500 }
     );
   }
