@@ -880,7 +880,7 @@ function PlanModal({
     async function fetchExternal() {
       setLoadingExternal(true);
       try {
-        const res = await fetch('https://buildarya.com/admin/api/get_all_modules');
+        const res = await fetch('https://buildarya.com/api/get_all_modules');
         const data = await res.json();
         setExternalModules(Array.isArray(data) ? data : []);
       } catch {
